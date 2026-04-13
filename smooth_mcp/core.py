@@ -214,8 +214,8 @@ def _make_newton_solver(
             dir_deriv_raw = jnp.dot(H, Jd)
             # Guard: if d is not a descent direction (dir_deriv >= 0), fall back
             # to steepest descent direction -grad(phi) = -J^T H, which has
-            # dir_deriv = -||J^T H||^2 < 0. We use -||H||^2 as a conservative
-            # negative estimate to avoid an extra VJP computation.
+            # dir_deriv = -||J^T H||^2 < 0. To avoid an extra VJP computation,
+            # we use -phi0 = -0.5*||H||^2 as a conservative negative estimate.
             dir_deriv = jnp.where(dir_deriv_raw < 0, dir_deriv_raw, -phi0)
 
             def ls_cond(ls_state):
