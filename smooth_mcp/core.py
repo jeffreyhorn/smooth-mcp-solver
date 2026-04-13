@@ -354,12 +354,18 @@ def solve_mcp(
 
         x = newton_solve(x, jnp.array(mu))
 
-        # Early exit: check if already converged at mu_min
-        res = float(jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta))))
-        if res < newton_tol:
-            break
+        # Early exit: only check the terminal-smoothed residual when we are at,
+        # or about to reach, the terminal continuation value. This avoids a
+        # host/device synchronization on every outer iteration.
+        next_mu = max(mu * mu_decay, mu_min)
+        if mu <= mu_min or next_mu <= mu_min:
+            res = float(
+                jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
+            )
+            if res < newton_tol:
+                break
 
-        mu = max(mu * mu_decay, mu_min)
+        mu = next_mu
 
     residual_norm = float(
         jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
