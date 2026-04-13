@@ -83,7 +83,7 @@ print(f"Initial u:        {u_init}")
 print(f"Gradient d(loss)/du: {grad_u}")
 print("  (du[0]≈0: x[0] is at lower bound, not upper)")
 print("  (du[1]=4: pushing u[1] down moves x[1] toward target=3)")
-print("  (du[2]��0: x[2] is interior, independent of bounds)")
+print("  (du[2]≈0: x[2] is interior, independent of bounds)")
 
 u_opt = u_init
 for _ in range(50):

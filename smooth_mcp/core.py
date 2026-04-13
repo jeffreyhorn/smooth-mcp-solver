@@ -13,7 +13,7 @@ class MCPResult(NamedTuple):
     Attributes:
         x: Solution array.
         residual_norm: Max absolute value of the smoothed residual at the solution.
-        num_steps: Number of mu-reduction steps taken.
+        num_steps: Total number of outer solver steps (mu-reduction and terminal-mu iterations).
         converged: True if the final residual norm is below newton_tol.
     """
 
@@ -32,9 +32,15 @@ def _normalize_F(F_fn):
     If F_fn takes only one positional parameter (x), wrap it to ignore theta.
     Counts all positional parameters (POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD),
     including those with defaults, so `def F(x, theta=None)` is treated as
-    two-argument and not wrapped.
+    two-argument and not wrapped. Functions with *args (VAR_POSITIONAL) are
+    also treated as multi-argument and not wrapped.
     """
     sig = inspect.signature(F_fn)
+    has_var_positional = any(
+        p.kind is inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values()
+    )
+    if has_var_positional:
+        return F_fn
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -205,7 +211,12 @@ def _make_newton_solver(
             # Directional derivative of merit phi(x) = 0.5*||H(x)||^2 along d:
             # nabla(phi) . d = (J^T H)^T d = H^T (J d)
             _, Jd = jax.jvp(lambda xx: _residual(xx, mu), (x,), (d,))
-            dir_deriv = jnp.dot(H, Jd)
+            dir_deriv_raw = jnp.dot(H, Jd)
+            # Guard: if d is not a descent direction (dir_deriv >= 0), fall back
+            # to steepest descent direction -grad(phi) = -J^T H, which has
+            # dir_deriv = -||J^T H||^2 < 0. We use -||H||^2 as a conservative
+            # negative estimate to avoid an extra VJP computation.
+            dir_deriv = jnp.where(dir_deriv_raw < 0, dir_deriv_raw, -phi0)
 
             def ls_cond(ls_state):
                 alpha, ls_it = ls_state
@@ -338,14 +349,12 @@ def solve_mcp(
 
         x = newton_solve(x, jnp.array(mu))
 
+        # Early exit: check if already converged at mu_min
+        res = float(jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta))))
+        if res < newton_tol:
+            break
+
         mu = max(mu * mu_decay, mu_min)
-        if mu <= mu_min:
-            # At terminal mu — check if we can exit early
-            res = float(
-                jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
-            )
-            if res < newton_tol:
-                break
 
     residual_norm = float(
         jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))

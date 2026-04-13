@@ -310,3 +310,19 @@ class TestNormalizeF:
             theta=jnp.array([2.0]),
         )
         assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
+
+    def test_var_positional_args(self):
+        """F(x, *args) should NOT be wrapped — *args can accept theta."""
+
+        def F(x, *args):
+            theta = args[0]
+            return theta[0] * x - 1.0
+
+        sol = solve_mcp(
+            F,
+            jnp.array([0.0]),
+            jnp.full(1, jnp.inf),
+            jnp.array([1.0]),
+            theta=jnp.array([2.0]),
+        )
+        assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
