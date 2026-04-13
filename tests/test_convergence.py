@@ -246,6 +246,38 @@ class TestInputValidation:
                 F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_init=-1.0
             )
 
+    def test_negative_mu_min(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_min must be positive"):
+            solve_mcp(
+                F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_min=-1.0
+            )
+
+    def test_mu_min_zero(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_min must be positive"):
+            solve_mcp(
+                F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_min=0.0
+            )
+
+    def test_mu_min_greater_than_mu_init(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_min must be <= mu_init"):
+            solve_mcp(
+                F,
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([0.5]),
+                mu_init=0.1,
+                mu_min=1.0,
+            )
+
     def test_mu_decay_zero(self):
         def F(x):
             return x
@@ -323,6 +355,14 @@ class TestDiffSolverValidation:
     def test_invalid_mu_init(self):
         with pytest.raises(ValueError, match="mu_init must be positive"):
             make_mcp_solver_diff(lambda x: x, mu_init=0.0)
+
+    def test_invalid_mu_min(self):
+        with pytest.raises(ValueError, match="mu_min must be positive"):
+            make_mcp_solver_diff(lambda x: x, mu_min=0.0)
+
+    def test_invalid_mu_min_greater_than_init(self):
+        with pytest.raises(ValueError, match="mu_min must be <= mu_init"):
+            make_mcp_solver_diff(lambda x: x, mu_init=0.1, mu_min=1.0)
 
     def test_invalid_mu_decay(self):
         with pytest.raises(ValueError, match="mu_decay must be in"):

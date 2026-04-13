@@ -194,7 +194,7 @@ def _make_continuation_solver(
             mu_next_new = jnp.maximum(mu_next * mu_decay, mu_min)
             return x_new, mu_next_new, mu_used_new, step + 1, converged
 
-        mu_init_arr = jnp.array(mu_init)
+        mu_init_arr = jnp.array(mu_init, dtype=x0.dtype)
         init = (x0, mu_init_arr, mu_init_arr, jnp.array(0), jnp.array(False))
         x_final, _mu_next, mu_used, num_steps, _converged = lax.while_loop(
             cond, body, init
@@ -279,6 +279,12 @@ def solve_mcp(
         raise ValueError("Lower bounds must not exceed upper bounds (l <= u)")
     if mu_init <= 0:
         raise ValueError(f"mu_init must be positive, got {mu_init}")
+    if mu_min <= 0:
+        raise ValueError(f"mu_min must be positive, got {mu_min}")
+    if mu_min > mu_init:
+        raise ValueError(
+            f"mu_min must be <= mu_init, got mu_min={mu_min}, mu_init={mu_init}"
+        )
     if mu_decay <= 0 or mu_decay >= 1:
         raise ValueError(f"mu_decay must be in (0, 1), got {mu_decay}")
     if max_mu_steps < 1:
@@ -335,7 +341,7 @@ def solve_mcp(
             newton_tol,
             max_mu_steps,
         )
-        x, _mu_final, num_steps = jax.jit(continuation)(x0)
+        x, _mu_final, num_steps = continuation(x0)
         num_steps = int(num_steps)
 
     residual_norm = float(

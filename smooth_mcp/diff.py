@@ -86,6 +86,12 @@ def make_mcp_solver_diff(
     F_fn_normalized = _normalize_F(F_fn)
     if mu_init <= 0:
         raise ValueError(f"mu_init must be positive, got {mu_init}")
+    if mu_min <= 0:
+        raise ValueError(f"mu_min must be positive, got {mu_min}")
+    if mu_min > mu_init:
+        raise ValueError(
+            f"mu_min must be <= mu_init, got mu_min={mu_min}, mu_init={mu_init}"
+        )
     if mu_decay <= 0 or mu_decay >= 1:
         raise ValueError(f"mu_decay must be in (0, 1), got {mu_decay}")
     if max_mu_steps < 1:
