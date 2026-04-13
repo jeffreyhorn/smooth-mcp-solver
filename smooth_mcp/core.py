@@ -45,7 +45,7 @@ def _normalize_F(F_fn):
     if has_keyword_only or has_var_keyword:
         raise ValueError(
             f"F_fn has keyword-only or **kwargs parameters which are not supported. "
-            f"F_fn must accept positional arguments: F(x) or F(x, theta). "
+            f"F_fn must accept positional arguments: F(x), F(x, theta), or F(x, *args). "
             f"Got signature: {sig}"
         )
     has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
