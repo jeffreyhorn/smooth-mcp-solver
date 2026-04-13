@@ -29,7 +29,7 @@ class TestSingularJacobian:
         assert jnp.all(jnp.isfinite(result.x)), f"Got non-finite: {result.x}"
 
     def test_symmetric_initial_guess_no_regularization(self):
-        """Without regularization, singular Jacobian produces NaN."""
+        """Without regularization, singular Jacobian produces a worse result."""
 
         def F(x):
             x1, x2 = x[0], x[1]
@@ -41,8 +41,18 @@ class TestSingularJacobian:
             )
 
         x0 = jnp.array([1.0, 1.0])
-        result = solve_mcp(F, jnp.zeros(2), jnp.full(2, jnp.inf), x0, regularize=0.0)
-        assert jnp.any(jnp.isnan(result.x)), "Expected NaN without regularization"
+        result_reg = solve_mcp(
+            F, jnp.zeros(2), jnp.full(2, jnp.inf), x0, regularize=1e-12
+        )
+        result_noreg = solve_mcp(
+            F, jnp.zeros(2), jnp.full(2, jnp.inf), x0, regularize=0.0
+        )
+        # Without regularization, the solver should do worse:
+        # either non-finite or not converged
+        reg_ok = result_reg.converged and jnp.all(jnp.isfinite(result_reg.x))
+        noreg_ok = result_noreg.converged and jnp.all(jnp.isfinite(result_noreg.x))
+        assert reg_ok, "Regularized solver should converge"
+        assert not noreg_ok, "Unregularized solver should fail on singular Jacobian"
 
     def test_symmetric_problem_with_asymmetric_x0(self):
         """Same problem with asymmetric x0 to avoid singularity entirely."""
@@ -233,3 +243,70 @@ class TestInputValidation:
             solve_mcp(
                 F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_init=-1.0
             )
+
+
+class TestNormalizeF:
+    """Test _normalize_F edge cases."""
+
+    def test_single_arg_function(self):
+        """F(x) should be wrapped to ignore theta."""
+
+        def F(x):
+            return 2.0 * x - 1.0
+
+        sol = solve_mcp(F, jnp.array([0.0]), jnp.full(1, jnp.inf), jnp.array([1.0]))
+        assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
+
+    def test_two_arg_function(self):
+        """F(x, theta) should be passed through unchanged."""
+
+        def F(x, theta):
+            return theta[0] * x - 1.0
+
+        sol = solve_mcp(
+            F,
+            jnp.array([0.0]),
+            jnp.full(1, jnp.inf),
+            jnp.array([1.0]),
+            theta=jnp.array([2.0]),
+        )
+        assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
+
+    def test_function_with_default_arg(self):
+        """F(x, theta=None) has 2 positional params and should NOT be wrapped."""
+
+        def F(x, theta=None):
+            if theta is None:
+                return 2.0 * x - 1.0
+            return theta[0] * x - 1.0
+
+        # With explicit theta
+        sol = solve_mcp(
+            F,
+            jnp.array([0.0]),
+            jnp.full(1, jnp.inf),
+            jnp.array([1.0]),
+            theta=jnp.array([4.0]),
+        )
+        assert jnp.isclose(sol.x[0], 0.25, atol=1e-8)
+
+    def test_lambda_single_arg(self):
+        """Lambda with one arg should be wrapped."""
+        sol = solve_mcp(
+            lambda x: 2.0 * x - 1.0,
+            jnp.array([0.0]),
+            jnp.full(1, jnp.inf),
+            jnp.array([1.0]),
+        )
+        assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
+
+    def test_lambda_two_args(self):
+        """Lambda with two args should not be wrapped."""
+        sol = solve_mcp(
+            lambda x, theta: theta[0] * x - 1.0,
+            jnp.array([0.0]),
+            jnp.full(1, jnp.inf),
+            jnp.array([1.0]),
+            theta=jnp.array([2.0]),
+        )
+        assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)

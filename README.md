@@ -132,7 +132,7 @@ grad = jax.grad(loss)(theta_init)
 
 ### Solver options
 
-Both `solve_mcp` and `make_mcp_solver_diff` accept:
+Both `solve_mcp` and `make_mcp_solver_diff` accept these **common parameters**:
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -145,18 +145,36 @@ Both `solve_mcp` and `make_mcp_solver_diff` accept:
 | `backtrack_rho` | `0.5` | Line search contraction factor |
 | `max_ls_steps` | `20` | Maximum line search steps |
 
-`make_mcp_solver_diff` additionally accepts:
+Both also accept these **forward Newton linear solver** parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `linear_solver` | `"dense"` | `"dense"` (jacfwd + linalg.solve) or `"gmres"` (matrix-free, better for large problems) |
+| `krylov_tol` | `1e-6` | Forward GMRES tolerance (only when `linear_solver="gmres"`) |
+| `krylov_maxiter` | `500` | Forward GMRES max iterations (only when `linear_solver="gmres"`) |
+| `krylov_restart` | `30` | Forward GMRES restart (only when `linear_solver="gmres"`) |
+| `regularize` | `1e-12` | Tikhonov regularization on Newton Jacobian (J + reg*I). Set to 0 to disable |
+
+`solve_mcp` additionally accepts:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `verbose` | `False` | Print progress during solving |
+
+`make_mcp_solver_diff` additionally accepts these **backward (adjoint) solver** parameters:
 
 | Parameter | Default | Description |
 |---|---|---|
 | `adjoint_method` | `"gmres"` | Adjoint solver: `"gmres"` (general) or `"cg"` (SPD systems only) |
-| `gmres_tol` | `1e-8` | GMRES tolerance |
-| `gmres_restart` | `30` | GMRES restart parameter |
-| `gmres_maxiter` | `500` | GMRES maximum iterations |
-| `cg_tol` | `1e-8` | CG tolerance (only used when `adjoint_method="cg"`) |
-| `cg_maxiter` | `1000` | CG maximum iterations (only used when `adjoint_method="cg"`) |
+| `gmres_tol` | `1e-8` | Adjoint GMRES tolerance |
+| `gmres_restart` | `30` | Adjoint GMRES restart parameter |
+| `gmres_maxiter` | `500` | Adjoint GMRES maximum iterations |
+| `cg_tol` | `1e-8` | Adjoint CG tolerance (only when `adjoint_method="cg"`) |
+| `cg_maxiter` | `1000` | Adjoint CG max iterations (only when `adjoint_method="cg"`) |
 | `precond` | `None` | Preconditioner callable for adjoint solve |
 | `differentiate_through_x0` | `False` | Enable straight-through gradients for `x0` |
+
+Note: The forward solver parameters (`linear_solver`, `krylov_*`, `regularize`) control how Newton steps are computed during the solve. The adjoint parameters (`adjoint_method`, `gmres_*`, `cg_*`, `precond`) control the implicit differentiation linear solve in the backward pass only.
 
 ## API
 
@@ -164,7 +182,6 @@ Both `solve_mcp` and `make_mcp_solver_diff` accept:
 |---|---|
 | `solve_mcp(F_fn, l, u, x0, ...)` | Solve an MCP, returns `MCPResult` (theta optional) |
 | `make_mcp_solver_diff(F_fn, ...)` | Create a differentiable solver (supports `jax.grad`) |
-| `solve_mcp_diff(F_fn, l, u, x0, ...)` | Convenience wrapper (rebuilds solver each call — use `make_mcp_solver_diff` in loops) |
 | `MCPResult` | NamedTuple: `x`, `residual_norm`, `num_steps`, `converged` |
 
 Lower-level building blocks (`smooth_max`, `smooth_min`, `smooth_proj`, `smoothed_residual`) are also exported.
@@ -180,6 +197,8 @@ The `demos/` directory contains runnable examples:
 | `nonlinear_1d_mcp.py` | 1D nonlinear MCP with finite bounds |
 | `2d_nonlinear_complementarity_problem.py` | 2D nonlinear complementarity problem |
 | `kkt_conditions.py` | KKT conditions from bound-constrained QP |
+| `bound_optimization.py` | Optimizing bounds via `jax.grad` through the MCP solution |
+| `obstacle_problem.py` | 50D discretized obstacle problem (showcases `linear_solver="gmres"`) |
 | `spatial_price_equilibrium.py` | Spatial price equilibrium network model |
 | `traffic_route_choice.py` | Traffic route choice equilibrium |
 
