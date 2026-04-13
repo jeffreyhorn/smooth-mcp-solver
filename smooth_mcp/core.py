@@ -37,8 +37,9 @@ def _normalize_F(F_fn):
     sig = inspect.signature(F_fn)
     params = sig.parameters.values()
     has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
+    has_var_keyword = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
     has_keyword_only = any(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params)
-    if has_var_positional or has_keyword_only:
+    if has_var_positional or has_var_keyword or has_keyword_only:
         return F_fn
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
