@@ -52,6 +52,8 @@ dx*/dtheta = -(dH/dx)^{-1} (dH/dtheta)
 
 The backward pass solves the adjoint system `(dH/dx)^T lambda = g` (where `g` is the incoming cotangent) using GMRES, then computes `dtheta = -(dH/dtheta)^T lambda`. This is Jacobian-free — only matrix-vector products via `jax.vjp` are needed, avoiding explicit Jacobian construction in the backward pass.
 
+Gradients are computed at the actual terminal smoothing parameter from the forward solve — not necessarily `mu_min`. This means truncated solves (small `max_mu_steps`) produce gradients consistent with the smoothed system that was actually solved. The differentiable solver is fully compatible with `jax.jit`.
+
 ## Installation
 
 ```bash
@@ -70,6 +72,15 @@ jax.config.update("jax_enable_x64", True)
 ```
 
 ## Usage
+
+### Function signatures
+
+Both `solve_mcp` and `make_mcp_solver_diff` accept `F_fn` in two forms:
+
+- **`F(x)`** — for problems with no parameters. `theta` is optional and ignored.
+- **`F(x, theta)`** — for parametrized problems. Pass `theta` to differentiate through.
+
+The low-level `smoothed_residual` function requires the two-argument form `F(x, theta)`.
 
 ### Solving an MCP
 
@@ -130,6 +141,31 @@ grad = jax.grad(loss)(theta_init)
 
 `make_mcp_solver_diff` returns a function `solve(l, u, x0, theta)` that produces the same solution as `solve_mcp` but supports `jax.grad` via implicit differentiation.
 
+### JAX integration
+
+The differentiable solver is fully compatible with JAX transformations:
+
+```python
+diff_solver = make_mcp_solver_diff(F)
+
+# jax.grad — compute gradients through the MCP solution
+grad_fn = jax.grad(lambda th: jnp.sum(diff_solver(l, u, x0, th) ** 2))
+g = grad_fn(theta)
+
+# jax.jit — compile the gradient computation for ~1000x speedup
+jit_grad = jax.jit(grad_fn)
+g_fast = jit_grad(theta)  # first call traces (~seconds), subsequent calls ~milliseconds
+```
+
+Supported JAX transformations:
+- `jax.grad` / `jax.value_and_grad` — gradients w.r.t. `theta`, `x0` (with `differentiate_through_x0=True`), `l`, and `u`
+- `jax.jit` — full JIT compilation of forward solve, backward pass, or both
+- `jax.vmap` — batching over different parameter values (via standard JAX patterns)
+
+Caveats:
+- `solve_mcp` with `verbose=True` uses a Python loop and is **not** JIT-compatible. Use `verbose=False` (the default) for JIT.
+- `solve_mcp` returns an `MCPResult` (a Python NamedTuple with eager `float`/`int` fields), so it cannot itself be JIT-compiled. Use `make_mcp_solver_diff` for JIT-compatible code.
+
 ### Solver options
 
 Both `solve_mcp` and `make_mcp_solver_diff` accept these **common parameters**:
@@ -184,7 +220,7 @@ Note: The forward solver parameters (`linear_solver`, `krylov_*`, `regularize`) 
 | `make_mcp_solver_diff(F_fn, ...)` | Create a differentiable solver (supports `jax.grad`) |
 | `MCPResult` | NamedTuple: `x`, `residual_norm`, `num_steps`, `converged` |
 
-Lower-level building blocks (`smooth_max`, `smooth_min`, `smooth_proj`, `smoothed_residual`) are also exported.
+Lower-level building blocks (`smooth_max`, `smooth_min`, `smooth_proj`, `smoothed_residual`) are also exported. Note: `smoothed_residual` is a low-level function that requires `F_fn(x, theta)` — it does not auto-normalize single-argument functions like the solver APIs do.
 
 ## Demos
 

@@ -246,6 +246,104 @@ class TestInputValidation:
                 F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_init=-1.0
             )
 
+    def test_mu_decay_zero(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_decay must be in"):
+            solve_mcp(
+                F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_decay=0.0
+            )
+
+    def test_mu_decay_one(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_decay must be in"):
+            solve_mcp(
+                F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([0.5]), mu_decay=1.0
+            )
+
+    def test_mu_decay_negative(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="mu_decay must be in"):
+            solve_mcp(
+                F,
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([0.5]),
+                mu_decay=-0.5,
+            )
+
+    def test_max_mu_steps_zero(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="max_mu_steps must be >= 1"):
+            solve_mcp(
+                F,
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([0.5]),
+                max_mu_steps=0,
+            )
+
+    def test_negative_newton_tol(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="newton_tol must be non-negative"):
+            solve_mcp(
+                F,
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([0.5]),
+                newton_tol=-1e-10,
+            )
+
+    def test_negative_regularize(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="regularize must be non-negative"):
+            solve_mcp(
+                F,
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([0.5]),
+                regularize=-1.0,
+            )
+
+
+class TestDiffSolverValidation:
+    """Validate that make_mcp_solver_diff rejects invalid parameters at construction."""
+
+    def test_invalid_mu_init(self):
+        with pytest.raises(ValueError, match="mu_init must be positive"):
+            make_mcp_solver_diff(lambda x: x, mu_init=0.0)
+
+    def test_invalid_mu_decay(self):
+        with pytest.raises(ValueError, match="mu_decay must be in"):
+            make_mcp_solver_diff(lambda x: x, mu_decay=1.5)
+
+    def test_invalid_max_mu_steps(self):
+        with pytest.raises(ValueError, match="max_mu_steps must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, max_mu_steps=0)
+
+    def test_invalid_newton_tol(self):
+        with pytest.raises(ValueError, match="newton_tol must be non-negative"):
+            make_mcp_solver_diff(lambda x: x, newton_tol=-1.0)
+
+    def test_invalid_regularize(self):
+        with pytest.raises(ValueError, match="regularize must be non-negative"):
+            make_mcp_solver_diff(lambda x: x, regularize=-0.1)
+
+    def test_invalid_adjoint_method(self):
+        with pytest.raises(ValueError, match="adjoint_method must be"):
+            make_mcp_solver_diff(lambda x: x, adjoint_method="bicgstab")
+
 
 class TestNormalizeF:
     """Test _normalize_F edge cases."""

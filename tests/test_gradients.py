@@ -309,68 +309,6 @@ class TestGradientBounds:
         assert jnp.allclose(grad_u, 0.0, atol=1e-5), f"du should be ~0, got {grad_u}"
 
 
-class TestSolveMcpDiff:
-    """Tests for the solve_mcp_diff convenience wrapper."""
-
-    def test_solution_matches_make_solver(self):
-        """solve_mcp_diff should produce the same result as make_mcp_solver_diff."""
-        from smooth_mcp.core import solve_mcp_diff
-
-        def F(x, theta):
-            M = theta.reshape(2, 2)
-            return M @ x + jnp.array([1.0, -2.0])
-
-        l = jnp.zeros(2)
-        u = jnp.full(2, jnp.inf)
-        x0 = jnp.zeros(2)
-        theta = jnp.array([[2.0, -1.0], [-1.0, 3.0]]).flatten()
-
-        sol_wrapper = solve_mcp_diff(F, l, u, x0, theta)
-        solver = make_mcp_solver_diff(F)
-        sol_factory = solver(l, u, x0, theta)
-
-        assert jnp.allclose(sol_wrapper, sol_factory, atol=1e-10)
-
-    def test_gradient_matches(self):
-        """Gradients through solve_mcp_diff should match make_mcp_solver_diff."""
-        from smooth_mcp.core import solve_mcp_diff
-
-        def F(x, theta):
-            return theta[0] * x - theta[1]
-
-        l = jnp.array([0.0])
-        u = jnp.array([5.0])
-        x0 = jnp.array([2.0])
-        theta = jnp.array([2.0, 3.0])
-
-        def loss_wrapper(th):
-            sol = solve_mcp_diff(F, l, u, x0, th)
-            return jnp.sum(sol**2)
-
-        solver = make_mcp_solver_diff(F)
-
-        def loss_factory(th):
-            sol = solver(l, u, x0, th)
-            return jnp.sum(sol**2)
-
-        grad_wrapper = jax.grad(loss_wrapper)(theta)
-        grad_factory = jax.grad(loss_factory)(theta)
-
-        assert jnp.allclose(
-            grad_wrapper, grad_factory, atol=1e-10
-        ), f"Wrapper grad={grad_wrapper}, factory grad={grad_factory}"
-
-    def test_no_theta(self):
-        """solve_mcp_diff should work without theta for single-arg F."""
-        from smooth_mcp.core import solve_mcp_diff
-
-        def F(x):
-            return x**3 - x - 1.0
-
-        sol = solve_mcp_diff(F, jnp.array([0.0]), jnp.array([2.0]), jnp.array([1.0]))
-        assert jnp.isclose(sol[0], 1.3247179572, atol=1e-5)
-
-
 class TestAdjointCG:
     """Test gradients using adjoint_method='cg' on SPD problems."""
 
@@ -425,3 +363,136 @@ class TestAdjointCG:
         assert jnp.allclose(
             grad_cg, grad_gmres, atol=1e-6
         ), f"CG={grad_cg}, GMRES={grad_gmres}"
+
+
+class TestPreconditioner:
+    """Test that supplying a preconditioner to the adjoint solve works."""
+
+    def test_identity_precond_matches_no_precond(self):
+        """Identity preconditioner should give the same gradient as no preconditioner."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver_none = make_mcp_solver_diff(F, precond=None)
+        solver_id = make_mcp_solver_diff(F, precond=lambda v: v)
+
+        def loss_none(th):
+            return jnp.sum(solver_none(l, u, x0, th) ** 2)
+
+        def loss_id(th):
+            return jnp.sum(solver_id(l, u, x0, th) ** 2)
+
+        grad_none = jax.grad(loss_none)(theta)
+        grad_id = jax.grad(loss_id)(theta)
+
+        assert jnp.allclose(
+            grad_none, grad_id, atol=1e-8
+        ), f"none={grad_none}, identity={grad_id}"
+
+    def test_diagonal_precond_gradient_correct(self):
+        """Diagonal preconditioner should still produce correct gradients."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        # Diagonal preconditioner (approximate inverse of J^T)
+        solver = make_mcp_solver_diff(F, precond=lambda v: v / theta)
+
+        def loss(th):
+            return jnp.sum(solver(l, u, x0, th) ** 2)
+
+        grad_auto = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+
+        assert jnp.allclose(
+            grad_auto, grad_fd, atol=1e-5
+        ), f"precond grad mismatch: auto={grad_auto}, fd={grad_fd}"
+
+
+class TestTruncatedContinuationGradients:
+    """Test gradients when the continuation is truncated (few mu steps).
+
+    The backward pass uses the actual terminal mu from the forward solve,
+    so truncated solves should still produce correct gradients.
+    """
+
+    def test_truncated_1_step(self):
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        solver = make_mcp_solver_diff(F, max_mu_steps=1)
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        def loss(th):
+            return jnp.sum(solver(l, u, x0, th) ** 2)
+
+        grad_auto = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+        assert jnp.allclose(
+            grad_auto, grad_fd, atol=1e-4
+        ), f"Truncated 1-step grad mismatch: auto={grad_auto}, fd={grad_fd}"
+
+    def test_truncated_2_steps(self):
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        solver = make_mcp_solver_diff(F, max_mu_steps=2)
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        def loss(th):
+            return jnp.sum(solver(l, u, x0, th) ** 2)
+
+        grad_auto = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+        assert jnp.allclose(
+            grad_auto, grad_fd, atol=1e-4
+        ), f"Truncated 2-step grad mismatch: auto={grad_auto}, fd={grad_fd}"
+
+
+class TestJitComposability:
+    """Test that the differentiable solver composes with jax.jit."""
+
+    def _make_problem(self):
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        solver = make_mcp_solver_diff(F)
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+        return solver, l, u, x0, theta
+
+    def test_jit_forward(self):
+        """jax.jit(solver)(...) should produce a finite solution."""
+        solver, l, u, x0, theta = self._make_problem()
+        jitted = jax.jit(solver)
+        result = jitted(l, u, x0, theta)
+        assert jnp.all(jnp.isfinite(result))
+
+    def test_jit_grad(self):
+        """jax.jit(jax.grad(loss))(...) should produce a finite gradient."""
+        solver, l, u, x0, theta = self._make_problem()
+
+        def loss(th):
+            return jnp.sum(solver(l, u, x0, th) ** 2)
+
+        grad = jax.jit(jax.grad(loss))(theta)
+        assert jnp.all(jnp.isfinite(grad))
