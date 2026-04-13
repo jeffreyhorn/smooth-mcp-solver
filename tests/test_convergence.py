@@ -328,3 +328,21 @@ class TestNormalizeF:
             theta=jnp.array([2.0]),
         )
         assert jnp.isclose(sol.x[0], 0.5, atol=1e-8)
+
+    def test_keyword_only_raises(self):
+        """F(x, *, theta) is unsupported and should raise ValueError."""
+
+        def F(x, *, theta):
+            return theta[0] * x - 1.0
+
+        with pytest.raises(ValueError, match="keyword-only"):
+            solve_mcp(F, jnp.array([0.0]), jnp.full(1, jnp.inf), jnp.array([1.0]))
+
+    def test_var_keyword_raises(self):
+        """F(x, **kwargs) is unsupported and should raise ValueError."""
+
+        def F(x, **kwargs):
+            return x - 1.0
+
+        with pytest.raises(ValueError, match="keyword-only"):
+            solve_mcp(F, jnp.array([0.0]), jnp.full(1, jnp.inf), jnp.array([1.0]))

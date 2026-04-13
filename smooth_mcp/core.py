@@ -27,19 +27,29 @@ _BIG = 1e15
 
 
 def _normalize_F(F_fn):
-    """Wrap F_fn to always accept (x, theta).
+    """Wrap F_fn to always accept (x, theta) as positional arguments.
 
-    If F_fn takes only one parameter (x) and has no *args, **kwargs, or
-    keyword-only parameters, wrap it to ignore theta. Otherwise return as-is.
-    This ensures functions like `def F(x, theta=None)`, `def F(x, *args)`,
-    and `def F(x, *, theta)` are all treated as multi-argument and not wrapped.
+    Supported signatures:
+        - F(x)           -> wrapped to ignore theta
+        - F(x, theta)    -> used as-is
+        - F(x, *args)    -> used as-is (theta passed positionally via *args)
+
+    Unsupported signatures (raise ValueError):
+        - F(x, *, theta) -> keyword-only theta cannot be called positionally
+        - F(x, **kwargs) -> ambiguous calling convention
     """
     sig = inspect.signature(F_fn)
     params = sig.parameters.values()
-    has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
     has_var_keyword = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
     has_keyword_only = any(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params)
-    if has_var_positional or has_var_keyword or has_keyword_only:
+    if has_keyword_only or has_var_keyword:
+        raise ValueError(
+            f"F_fn has keyword-only or **kwargs parameters which are not supported. "
+            f"F_fn must accept positional arguments: F(x) or F(x, theta). "
+            f"Got signature: {sig}"
+        )
+    has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
+    if has_var_positional:
         return F_fn
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
