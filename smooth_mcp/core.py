@@ -197,9 +197,14 @@ def _make_newton_solver(
         )
         return d
 
-    _solve_linear = (
-        _solve_linear_dense if linear_solver == "dense" else _solve_linear_gmres
-    )
+    if linear_solver == "dense":
+        _solve_linear = _solve_linear_dense
+    elif linear_solver == "gmres":
+        _solve_linear = _solve_linear_gmres
+    else:
+        raise ValueError(
+            f"linear_solver must be 'dense' or 'gmres', got {linear_solver!r}"
+        )
 
     @jax.jit
     def solve(x0, mu):
