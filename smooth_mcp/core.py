@@ -29,24 +29,23 @@ _BIG = 1e15
 def _normalize_F(F_fn):
     """Wrap F_fn to always accept (x, theta).
 
-    If F_fn takes only one positional parameter (x), wrap it to ignore theta.
-    Counts all positional parameters (POSITIONAL_ONLY, POSITIONAL_OR_KEYWORD),
-    including those with defaults, so `def F(x, theta=None)` is treated as
-    two-argument and not wrapped. Functions with *args (VAR_POSITIONAL) are
-    also treated as multi-argument and not wrapped.
+    If F_fn takes only one parameter (x) and has no *args, **kwargs, or
+    keyword-only parameters, wrap it to ignore theta. Otherwise return as-is.
+    This ensures functions like `def F(x, theta=None)`, `def F(x, *args)`,
+    and `def F(x, *, theta)` are all treated as multi-argument and not wrapped.
     """
     sig = inspect.signature(F_fn)
-    has_var_positional = any(
-        p.kind is inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values()
-    )
-    if has_var_positional:
+    params = sig.parameters.values()
+    has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
+    has_keyword_only = any(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params)
+    if has_var_positional or has_keyword_only:
         return F_fn
     positional_kinds = (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
     )
-    params = [p for p in sig.parameters.values() if p.kind in positional_kinds]
-    if len(params) <= 1:
+    n_positional = sum(1 for p in params if p.kind in positional_kinds)
+    if n_positional <= 1:
         return lambda x, theta: F_fn(x)
     return F_fn
 
