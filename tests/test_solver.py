@@ -291,3 +291,36 @@ class TestKrylovSolver:
         for i in range(2):
             assert sol[i] >= -1e-6, f"x[{i}] = {sol[i]} < 0"
             assert Fx[i] >= -1e-6, f"F[{i}] = {Fx[i]} < 0"
+
+    def test_diff_solver_gmres(self):
+        """make_mcp_solver_diff with linear_solver='gmres' should match dense."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver_dense = make_mcp_solver_diff(F, linear_solver="dense")
+        solver_gmres = make_mcp_solver_diff(F, linear_solver="gmres")
+
+        sol_dense = solver_dense(l, u, x0, theta)
+        sol_gmres = solver_gmres(l, u, x0, theta)
+        assert jnp.allclose(sol_dense, sol_gmres, atol=1e-6)
+
+        # Check gradients match too
+        def loss_dense(th):
+            return jnp.sum(solver_dense(l, u, x0, th) ** 2)
+
+        def loss_gmres(th):
+            return jnp.sum(solver_gmres(l, u, x0, th) ** 2)
+
+        import jax
+
+        grad_dense = jax.grad(loss_dense)(theta)
+        grad_gmres = jax.grad(loss_gmres)(theta)
+        assert jnp.allclose(
+            grad_dense, grad_gmres, atol=1e-5
+        ), f"dense={grad_dense}, gmres={grad_gmres}"

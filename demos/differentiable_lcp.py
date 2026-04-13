@@ -27,11 +27,6 @@ print(
 # Differentiable solve
 diff_solver = make_mcp_solver_diff(
     F_parametrized,
-    cg_tol=1e-10,
-    cg_maxiter=2000,
-    gmres_tol=1e-9,
-    gmres_restart=20,
-    gmres_maxiter=300,
     differentiate_through_x0=True,
 )
 

@@ -307,3 +307,121 @@ class TestGradientBounds:
         grad_u = jax.grad(loss_u)(jnp.array([10.0]))
         assert jnp.allclose(grad_l, 0.0, atol=1e-5), f"dl should be ~0, got {grad_l}"
         assert jnp.allclose(grad_u, 0.0, atol=1e-5), f"du should be ~0, got {grad_u}"
+
+
+class TestSolveMcpDiff:
+    """Tests for the solve_mcp_diff convenience wrapper."""
+
+    def test_solution_matches_make_solver(self):
+        """solve_mcp_diff should produce the same result as make_mcp_solver_diff."""
+        from smooth_mcp.core import solve_mcp_diff
+
+        def F(x, theta):
+            M = theta.reshape(2, 2)
+            return M @ x + jnp.array([1.0, -2.0])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.zeros(2)
+        theta = jnp.array([[2.0, -1.0], [-1.0, 3.0]]).flatten()
+
+        sol_wrapper = solve_mcp_diff(F, l, u, x0, theta)
+        solver = make_mcp_solver_diff(F)
+        sol_factory = solver(l, u, x0, theta)
+
+        assert jnp.allclose(sol_wrapper, sol_factory, atol=1e-10)
+
+    def test_gradient_matches(self):
+        """Gradients through solve_mcp_diff should match make_mcp_solver_diff."""
+        from smooth_mcp.core import solve_mcp_diff
+
+        def F(x, theta):
+            return theta[0] * x - theta[1]
+
+        l = jnp.array([0.0])
+        u = jnp.array([5.0])
+        x0 = jnp.array([2.0])
+        theta = jnp.array([2.0, 3.0])
+
+        def loss_wrapper(th):
+            sol = solve_mcp_diff(F, l, u, x0, th)
+            return jnp.sum(sol**2)
+
+        solver = make_mcp_solver_diff(F)
+
+        def loss_factory(th):
+            sol = solver(l, u, x0, th)
+            return jnp.sum(sol**2)
+
+        grad_wrapper = jax.grad(loss_wrapper)(theta)
+        grad_factory = jax.grad(loss_factory)(theta)
+
+        assert jnp.allclose(
+            grad_wrapper, grad_factory, atol=1e-10
+        ), f"Wrapper grad={grad_wrapper}, factory grad={grad_factory}"
+
+    def test_no_theta(self):
+        """solve_mcp_diff should work without theta for single-arg F."""
+        from smooth_mcp.core import solve_mcp_diff
+
+        def F(x):
+            return x**3 - x - 1.0
+
+        sol = solve_mcp_diff(F, jnp.array([0.0]), jnp.array([2.0]), jnp.array([1.0]))
+        assert jnp.isclose(sol[0], 1.3247179572, atol=1e-5)
+
+
+class TestAdjointCG:
+    """Test gradients using adjoint_method='cg' on SPD problems."""
+
+    def test_diagonal_lcp_cg_gradient(self):
+        """Diagonal LCP has a symmetric Jacobian, so CG is valid."""
+
+        def F(x, theta):
+            # F(x) = diag(theta) @ x + q — Jacobian is diag(theta), which is SPD
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver = make_mcp_solver_diff(F, adjoint_method="cg")
+
+        def loss(th):
+            sol = solver(l, u, x0, th)
+            return jnp.sum(sol**2)
+
+        grad_cg = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+
+        assert jnp.allclose(
+            grad_cg, grad_fd, atol=1e-5
+        ), f"CG grad mismatch: cg={grad_cg}, fd={grad_fd}"
+
+    def test_cg_matches_gmres_on_spd(self):
+        """On an SPD problem, CG and GMRES should give the same gradient."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver_cg = make_mcp_solver_diff(F, adjoint_method="cg")
+        solver_gmres = make_mcp_solver_diff(F, adjoint_method="gmres")
+
+        def loss_cg(th):
+            return jnp.sum(solver_cg(l, u, x0, th) ** 2)
+
+        def loss_gmres(th):
+            return jnp.sum(solver_gmres(l, u, x0, th) ** 2)
+
+        grad_cg = jax.grad(loss_cg)(theta)
+        grad_gmres = jax.grad(loss_gmres)(theta)
+
+        assert jnp.allclose(
+            grad_cg, grad_gmres, atol=1e-6
+        ), f"CG={grad_cg}, GMRES={grad_gmres}"

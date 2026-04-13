@@ -13,7 +13,7 @@ class MCPResult(NamedTuple):
     Attributes:
         x: Solution array.
         residual_norm: Max absolute value of the smoothed residual at the solution.
-        num_steps: Number of mu-reduction steps taken.
+        num_steps: Total number of outer solver steps (mu-reduction and terminal-mu iterations).
         converged: True if the final residual norm is below newton_tol.
     """
 
@@ -24,19 +24,39 @@ class MCPResult(NamedTuple):
 
 
 _BIG = 1e15
-_EMPTY_THETA = jnp.zeros(0)
 
 
 def _normalize_F(F_fn):
-    """Wrap F_fn to always accept (x, theta).
+    """Wrap F_fn to always accept (x, theta) as positional arguments.
 
-    If F_fn takes only one positional argument (x), wrap it to ignore theta.
+    Supported signatures:
+        - F(x)           -> wrapped to ignore theta
+        - F(x, theta)    -> used as-is
+        - F(x, *args)    -> used as-is (theta passed positionally via *args)
+
+    Unsupported signatures (raise ValueError):
+        - F(x, *, theta) -> keyword-only theta cannot be called positionally
+        - F(x, **kwargs) -> ambiguous calling convention
     """
     sig = inspect.signature(F_fn)
-    params = [
-        p for p in sig.parameters.values() if p.default is inspect.Parameter.empty
-    ]
-    if len(params) <= 1:
+    params = sig.parameters.values()
+    has_var_keyword = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+    has_keyword_only = any(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params)
+    if has_keyword_only or has_var_keyword:
+        raise ValueError(
+            f"F_fn has keyword-only or **kwargs parameters which are not supported. "
+            f"F_fn must accept positional arguments: F(x), F(x, theta), or F(x, *args). "
+            f"Got signature: {sig}"
+        )
+    has_var_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
+    if has_var_positional:
+        return F_fn
+    positional_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    n_positional = sum(1 for p in params if p.kind in positional_kinds)
+    if n_positional <= 1:
         return lambda x, theta: F_fn(x)
     return F_fn
 
@@ -120,9 +140,12 @@ def smoothed_residual(
     At a solution x* of the MCP, H(x*) = 0. The smoothing parameter mu
     controls how closely this approximates the exact (non-smooth) MCP residual.
 
+    Note: F_fn must accept two arguments (x, theta). If your function takes
+    only x, wrap it first: ``lambda x, theta: my_F(x)``.
+
     Args:
         x: Current iterate.
-        F_fn: Residual map F(x, theta).
+        F_fn: Residual map with signature F(x, theta) -> array.
         l: Lower bounds.
         u: Upper bounds.
         mu: Smoothing parameter (> 0).
@@ -184,9 +207,14 @@ def _make_newton_solver(
         )
         return d
 
-    _solve_linear = (
-        _solve_linear_dense if linear_solver == "dense" else _solve_linear_gmres
-    )
+    if linear_solver == "dense":
+        _solve_linear = _solve_linear_dense
+    elif linear_solver == "gmres":
+        _solve_linear = _solve_linear_gmres
+    else:
+        raise ValueError(
+            f"linear_solver must be 'dense' or 'gmres', got {linear_solver!r}"
+        )
 
     @jax.jit
     def solve(x0, mu):
@@ -195,7 +223,16 @@ def _make_newton_solver(
             d = _solve_linear(x, H, mu)
 
             phi0 = 0.5 * jnp.sum(H**2)
-            dir_deriv = -jnp.sum(H**2)
+            # Directional derivative of merit phi(x) = 0.5*||H(x)||^2 along d:
+            # nabla(phi) . d = (J^T H)^T d = H^T (J d)
+            _, Jd = jax.jvp(lambda xx: _residual(xx, mu), (x,), (d,))
+            dir_deriv_raw = jnp.dot(H, Jd)
+            # Guard: if d is not a descent direction (dir_deriv >= 0), replace
+            # the directional derivative with -phi0 = -0.5*||H||^2 so the
+            # Armijo condition still enforces sufficient decrease. The step
+            # direction d is kept unchanged; only the acceptance threshold
+            # is tightened to prevent accepting non-descent steps.
+            dir_deriv = jnp.where(dir_deriv_raw < 0, dir_deriv_raw, -phi0)
 
             def ls_cond(ls_state):
                 alpha, ls_it = ls_state
@@ -279,13 +316,14 @@ def solve_mcp(
         MCPResult with fields x, residual_norm, num_steps, converged.
     """
     F_fn = _normalize_F(F_fn)
-    if theta is None:
-        theta = _EMPTY_THETA
 
     l = jnp.asarray(l)
     u = jnp.asarray(u)
     x0 = jnp.asarray(x0)
-    theta = jnp.asarray(theta)
+    if theta is None:
+        theta = jnp.zeros(0, dtype=x0.dtype)
+    else:
+        theta = jnp.asarray(theta)
 
     if l.shape != u.shape:
         raise ValueError(
@@ -305,7 +343,7 @@ def solve_mcp(
         l,
         u,
         theta,
-        newton_tol,
+        tol=newton_tol,
         armijo_c=armijo_c,
         backtrack_rho=backtrack_rho,
         max_ls_steps=max_ls_steps,
@@ -327,9 +365,18 @@ def solve_mcp(
 
         x = newton_solve(x, jnp.array(mu))
 
-        mu = max(mu * mu_decay, mu_min)
-        if mu <= mu_min:
-            break
+        # Early exit: only check the terminal-smoothed residual when we are at,
+        # or about to reach, the terminal continuation value. This avoids a
+        # host/device synchronization on every outer iteration.
+        next_mu = max(mu * mu_decay, mu_min)
+        if mu <= mu_min or next_mu <= mu_min:
+            res = float(
+                jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
+            )
+            if res < newton_tol:
+                break
+
+        mu = next_mu
 
     residual_norm = float(
         jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
@@ -354,6 +401,11 @@ def make_mcp_solver_diff(
     armijo_c: float = 1e-4,
     backtrack_rho: float = 0.5,
     max_ls_steps: int = 20,
+    linear_solver: str = "dense",
+    krylov_tol: float = 1e-6,
+    krylov_maxiter: int = 500,
+    krylov_restart: int = 30,
+    regularize: float = 1e-12,
     adjoint_method: str = "gmres",
     gmres_tol: float = 1e-8,
     gmres_restart: int = 30,
@@ -381,14 +433,20 @@ def make_mcp_solver_diff(
         armijo_c: Armijo sufficient decrease parameter.
         backtrack_rho: Backtracking contraction factor.
         max_ls_steps: Maximum line search steps.
-        adjoint_method: Linear solver for the adjoint system. "gmres" (default,
+        linear_solver: Forward Newton linear solver. "dense" (default) or "gmres"
+            (matrix-free, better for large problems).
+        krylov_tol: Forward GMRES tolerance (only used when linear_solver="gmres").
+        krylov_maxiter: Forward GMRES max iterations (only when linear_solver="gmres").
+        krylov_restart: Forward GMRES restart (only when linear_solver="gmres").
+        regularize: Tikhonov regularization for the forward Newton Jacobian.
+        adjoint_method: Backward adjoint linear solver. "gmres" (default,
             correct for general non-symmetric systems) or "cg" (only valid when
             the Jacobian dH/dx is symmetric positive-definite).
-        gmres_tol: GMRES tolerance.
-        gmres_restart: GMRES restart parameter.
-        gmres_maxiter: GMRES maximum iterations.
-        cg_tol: CG solver tolerance (only used when adjoint_method="cg").
-        cg_maxiter: CG maximum iterations (only used when adjoint_method="cg").
+        gmres_tol: Adjoint GMRES tolerance.
+        gmres_restart: Adjoint GMRES restart parameter.
+        gmres_maxiter: Adjoint GMRES maximum iterations.
+        cg_tol: Adjoint CG tolerance (only used when adjoint_method="cg").
+        cg_maxiter: Adjoint CG max iterations (only used when adjoint_method="cg").
         precond: Optional preconditioner callable for the adjoint linear solve.
         differentiate_through_x0: If True, use straight-through estimator for x0 gradients.
 
@@ -398,6 +456,10 @@ def make_mcp_solver_diff(
         but theta is still required for JAX tracing.
     """
     F_fn_normalized = _normalize_F(F_fn)
+    if adjoint_method not in ("gmres", "cg"):
+        raise ValueError(
+            f"adjoint_method must be 'gmres' or 'cg', got {adjoint_method!r}"
+        )
 
     @custom_vjp
     def solve(l, u, x0, theta):
@@ -407,14 +469,19 @@ def make_mcp_solver_diff(
             u,
             x0,
             theta,
-            mu_init,
-            mu_min,
-            mu_decay,
-            newton_tol,
-            max_mu_steps,
-            armijo_c,
-            backtrack_rho,
-            max_ls_steps,
+            mu_init=mu_init,
+            mu_min=mu_min,
+            mu_decay=mu_decay,
+            newton_tol=newton_tol,
+            max_mu_steps=max_mu_steps,
+            armijo_c=armijo_c,
+            backtrack_rho=backtrack_rho,
+            max_ls_steps=max_ls_steps,
+            linear_solver=linear_solver,
+            krylov_tol=krylov_tol,
+            krylov_maxiter=krylov_maxiter,
+            krylov_restart=krylov_restart,
+            regularize=regularize,
             verbose=False,
         )
         return result.x
@@ -492,6 +559,6 @@ def solve_mcp_diff(
     once and reuse the returned function instead.
     """
     if theta is None:
-        theta = _EMPTY_THETA
+        theta = jnp.zeros(0, dtype=jnp.asarray(x0).dtype)
     solver = make_mcp_solver_diff(F_fn, **kwargs)
     return solver(l, u, x0, theta)
