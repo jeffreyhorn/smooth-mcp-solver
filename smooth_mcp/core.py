@@ -217,10 +217,11 @@ def _make_newton_solver(
             # nabla(phi) . d = (J^T H)^T d = H^T (J d)
             _, Jd = jax.jvp(lambda xx: _residual(xx, mu), (x,), (d,))
             dir_deriv_raw = jnp.dot(H, Jd)
-            # Guard: if d is not a descent direction (dir_deriv >= 0), fall back
-            # to steepest descent direction -grad(phi) = -J^T H, which has
-            # dir_deriv = -||J^T H||^2 < 0. To avoid an extra VJP computation,
-            # we use -phi0 = -0.5*||H||^2 as a conservative negative estimate.
+            # Guard: if d is not a descent direction (dir_deriv >= 0), replace
+            # the directional derivative with -phi0 = -0.5*||H||^2 so the
+            # Armijo condition still enforces sufficient decrease. The step
+            # direction d is kept unchanged; only the acceptance threshold
+            # is tightened to prevent accepting non-descent steps.
             dir_deriv = jnp.where(dir_deriv_raw < 0, dir_deriv_raw, -phi0)
 
             def ls_cond(ls_state):
@@ -445,6 +446,10 @@ def make_mcp_solver_diff(
         but theta is still required for JAX tracing.
     """
     F_fn_normalized = _normalize_F(F_fn)
+    if adjoint_method not in ("gmres", "cg"):
+        raise ValueError(
+            f"adjoint_method must be 'gmres' or 'cg', got {adjoint_method!r}"
+        )
 
     @custom_vjp
     def solve(l, u, x0, theta):
