@@ -289,6 +289,8 @@ def solve_mcp(
         raise ValueError(
             f"x0 must have the same shape as l, got {x0.shape} and {l.shape}"
         )
+    if jnp.any(jnp.isnan(l)) or jnp.any(jnp.isnan(u)):
+        raise ValueError("Bounds l and u must not contain NaN")
     if jnp.any(l > u):
         raise ValueError("Lower bounds must not exceed upper bounds (l <= u)")
     if mu_init <= 0:

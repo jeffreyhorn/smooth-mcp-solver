@@ -69,10 +69,20 @@ r.block_until_ready()
 print(f"  jit grad (first call, includes trace): {(time.perf_counter()-t0)*1000:.1f} ms")
 
 # Subsequent calls with same-shaped but different-valued inputs
-bench(
-    "jit grad (cached, varying theta)",
-    lambda: jit_grad(theta + 0.01 * jax.random.normal(jax.random.PRNGKey(0), theta.shape)),
-)
+theta_variants = [
+    theta + 0.01 * jax.random.normal(jax.random.PRNGKey(i), theta.shape)
+    for i in range(N_REPEATS)
+]
+_variant_idx = [0]
+
+
+def _bench_varying():
+    i = _variant_idx[0] % len(theta_variants)
+    _variant_idx[0] += 1
+    return jit_grad(theta_variants[i])
+
+
+bench("jit grad (cached, varying theta)", _bench_varying)
 
 print("\n=== Summary ===")
 print("  jax.jit(jax.grad(loss)) gives ~1000x speedup over eager jax.grad")

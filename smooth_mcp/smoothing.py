@@ -68,8 +68,10 @@ def smooth_proj(
     Returns:
         Smooth approximation to clip(z, l, u), same shape as z.
     """
-    l_safe = jnp.where(jnp.isfinite(l), l, -_BIG)
-    u_safe = jnp.where(jnp.isfinite(u), u, _BIG)
+    # Only replace -inf/-inf with _BIG surrogates. NaN bounds are preserved
+    # so they propagate as NaN rather than silently becoming large finite values.
+    l_safe = jnp.where(jnp.isneginf(l), -_BIG, l)
+    u_safe = jnp.where(jnp.isposinf(u), _BIG, u)
     inner = smooth_max(l_safe, z, mu)
     return smooth_min(u_safe, inner, mu)
 
