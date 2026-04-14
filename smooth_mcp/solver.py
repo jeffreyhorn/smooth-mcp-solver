@@ -59,6 +59,11 @@ def _normalize_F(F_fn):
     n_positional = sum(1 for p in params if p.kind in positional_kinds)
     if n_positional <= 1:
         return lambda x, theta: F_fn(x)
+    if n_positional > 2:
+        raise ValueError(
+            f"F_fn must accept 1 or 2 positional arguments, got {n_positional}. "
+            f"Signature: {sig}"
+        )
     return F_fn
 
 
@@ -327,7 +332,9 @@ def solve_mcp(
     )
 
     if verbose:
-        # Verbose mode: use Python loop for printing (not JIT-compatible)
+        # Verbose mode: use Python loop for printing (not JIT-compatible).
+        # Stopping logic matches the non-verbose kernel: check mu_min residual
+        # after every step so both paths produce identical results.
         x = x0
         mu = mu_init
         num_steps = 0
@@ -335,16 +342,14 @@ def solve_mcp(
             num_steps = step + 1
             print(f"Step {step:2d} | μ = {mu:.2e}")
             x = newton_solve(x, jnp.array(mu, dtype=x0.dtype))
-            next_mu = max(mu * mu_decay, mu_min)
-            if mu <= mu_min or next_mu <= mu_min:
-                res = float(
-                    jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
-                )
-                if res < newton_tol:
-                    break
-            mu = next_mu
+            res = float(
+                jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
+            )
+            if res < newton_tol:
+                break
+            mu = max(mu * mu_decay, mu_min)
     else:
-        # Non-verbose: pure-JAX kernel, JIT-compiled for performance
+        # Non-verbose: use the pure-JAX continuation solver path
         continuation = _make_continuation_solver(
             newton_solve,
             F_fn,
