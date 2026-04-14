@@ -190,7 +190,9 @@ def _make_continuation_solver(
             x_new = newton_solve(x, mu_next)
             res = _residual_norm_at(x_new, mu_min)
             converged = res < newton_tol
-            mu_used_new = mu_next
+            # When converged, record mu_min as mu_used since that's the system
+            # we tested against. Otherwise record the mu we actually solved at.
+            mu_used_new = jnp.where(converged, mu_min, mu_next)
             mu_next_new = jnp.maximum(mu_next * mu_decay, mu_min)
             return x_new, mu_next_new, mu_used_new, step + 1, converged
 
@@ -318,7 +320,7 @@ def solve_mcp(
         for step in range(max_mu_steps):
             num_steps = step + 1
             print(f"Step {step:2d} | μ = {mu:.2e}")
-            x = newton_solve(x, jnp.array(mu))
+            x = newton_solve(x, jnp.array(mu, dtype=x0.dtype))
             next_mu = max(mu * mu_decay, mu_min)
             if mu <= mu_min or next_mu <= mu_min:
                 res = float(
