@@ -366,7 +366,13 @@ def solve_mcp(
         num_steps = int(num_steps)
 
     residual_norm = float(
-        jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu_min, theta)))
+        jnp.max(
+            jnp.abs(
+                smoothed_residual(
+                    x, F_fn, l, u, jnp.array(mu_min, dtype=x0.dtype), theta  # type: ignore[arg-type]
+                )
+            )
+        )
     )
     converged = residual_norm < newton_tol
 
