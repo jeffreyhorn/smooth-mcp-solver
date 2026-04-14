@@ -163,8 +163,7 @@ Supported JAX transformations:
 - `jax.vmap` — batching over different parameter values (via standard JAX patterns)
 
 Caveats:
-- `solve_mcp` with `verbose=True` uses a Python loop and is **not** JIT-compatible. Use `verbose=False` (the default) for JIT.
-- `solve_mcp` returns an `MCPResult` (a Python NamedTuple with eager `float`/`int` fields), so it cannot itself be JIT-compiled. Use `make_mcp_solver_diff` for JIT-compatible code.
+- `solve_mcp` cannot be JIT-compiled regardless of `verbose`, because it performs Python-side scalar conversions and returns an `MCPResult` (a Python NamedTuple with eager `float`/`int` fields). Use `make_mcp_solver_diff` for JIT-compatible code.
 
 ### Solver options
 

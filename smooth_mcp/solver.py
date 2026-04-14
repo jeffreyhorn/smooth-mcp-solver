@@ -101,13 +101,15 @@ def _make_newton_solver(
             _, jvp_val = jax.jvp(lambda xx: _residual(xx, mu), (x,), (v,))
             return jvp_val + regularize * v
 
-        d, _ = gmres(
+        d, info = gmres(
             Jv,
             -H,
             tol=krylov_tol,
             maxiter=krylov_maxiter,
             restart=krylov_restart,
         )
+        # Propagate NaN if GMRES failed to converge (info != 0)
+        d = jnp.where(info == 0, d, jnp.full_like(d, jnp.nan))
         return d
 
     if linear_solver == "dense":

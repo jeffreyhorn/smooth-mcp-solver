@@ -169,15 +169,20 @@ def make_mcp_solver_diff(
             return vjp_x_fn(v)[0]
 
         if adjoint_method == "cg":
+            # JAX CG returns info=None (no convergence tracking)
             lambda_star, _ = cg(JTv, g, tol=cg_tol, maxiter=cg_maxiter, M=precond)
         else:
-            lambda_star, _ = gmres(
+            lambda_star, info = gmres(
                 JTv,
                 g,
                 tol=gmres_tol,
                 restart=gmres_restart,
                 maxiter=gmres_maxiter,
                 M=precond,
+            )
+            # Propagate NaN if GMRES failed to converge (info != 0)
+            lambda_star = jnp.where(
+                info == 0, lambda_star, jnp.full_like(lambda_star, jnp.nan)
             )
 
         _, vjp_theta = jax.vjp(H_theta, theta)
