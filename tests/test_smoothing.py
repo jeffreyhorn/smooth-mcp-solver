@@ -1,9 +1,10 @@
-"""Unit tests for smooth_max, smooth_min, and smooth_proj."""
+"""Unit tests for smooth_max, smooth_min, smooth_proj, and smoothed_residual."""
 
 import jax
 import jax.numpy as jnp
+import pytest
 
-from smooth_mcp import smooth_max, smooth_min, smooth_proj
+from smooth_mcp import smooth_max, smooth_min, smooth_proj, smoothed_residual
 
 
 class TestSmoothMax:
@@ -205,3 +206,60 @@ class TestSmoothProj:
         mu = 1e-12
         assert jnp.isclose(smooth_proj(jnp.array([0.0]), l, u, mu), 0.0, atol=1e-5)
         assert jnp.isclose(smooth_proj(jnp.array([5.0]), l, u, mu), 5.0, atol=1e-5)
+
+
+class TestSmoothedResidual:
+    """Tests for the smoothed_residual public API contract.
+
+    smoothed_residual requires F_fn(x, theta) — it does NOT auto-normalize
+    single-argument functions. This is intentional: it's a low-level building
+    block and the caller is responsible for providing the correct signature.
+    """
+
+    def test_two_arg_function(self):
+        """F(x, theta) works as expected."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0])
+
+        x = jnp.array([0.5])
+        l = jnp.array([0.0])
+        u = jnp.full(1, jnp.inf)
+        theta = jnp.array([2.0])
+        mu = 1e-12
+
+        H = smoothed_residual(x, F, l, u, mu, theta)
+        # F(0.5, 2.0) = 0, so z = x - F = 0.5, proj(0.5) ≈ 0.5, H ≈ 0
+        assert jnp.allclose(H, 0.0, atol=1e-5)
+
+    def test_single_arg_function_fails(self):
+        """F(x) without theta should raise TypeError (not auto-normalized)."""
+
+        def F(x):
+            return 2.0 * x - 1.0
+
+        x = jnp.array([0.5])
+        l = jnp.array([0.0])
+        u = jnp.full(1, jnp.inf)
+        theta = jnp.array([0.0])
+        mu = 1e-12
+
+        with pytest.raises(TypeError):
+            smoothed_residual(x, F, l, u, mu, theta)
+
+    def test_residual_zero_at_solution(self):
+        """At a known MCP solution, residual should be near zero."""
+
+        def F(x, theta):
+            M = jnp.array([[2.0, -1.0], [-1.0, 3.0]])
+            return M @ x + jnp.array([1.0, -2.0])
+
+        # Known solution: x* ≈ [0, 2/3]
+        x_star = jnp.array([0.0, 2.0 / 3.0])
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        theta = jnp.array([0.0])
+        mu = 1e-12
+
+        H = smoothed_residual(x_star, F, l, u, mu, theta)
+        assert jnp.allclose(H, 0.0, atol=1e-5)
