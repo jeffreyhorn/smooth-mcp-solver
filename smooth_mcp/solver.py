@@ -93,13 +93,17 @@ def _make_newton_solver(
     def _solve_linear_dense(x, H, mu):
         J = jax.jacfwd(lambda xx: _residual(xx, mu))(x)
         n = J.shape[0]
-        J_reg = J + regularize * jnp.eye(n)
+        # Cast regularize to input dtype to prevent float64 promotion
+        reg = jnp.array(regularize, dtype=x.dtype)
+        J_reg = J + reg * jnp.eye(n, dtype=x.dtype)
         return jnp.linalg.solve(J_reg, -H)
 
     def _solve_linear_gmres(x, H, mu):
+        reg = jnp.array(regularize, dtype=x.dtype)
+
         def Jv(v):
             _, jvp_val = jax.jvp(lambda xx: _residual(xx, mu), (x,), (v,))
-            return jvp_val + regularize * v
+            return jvp_val + reg * v
 
         d, info = gmres(
             Jv,
@@ -183,6 +187,12 @@ def _make_continuation_solver(
         return jnp.max(jnp.abs(smoothed_residual(x, F_fn, l, u, mu, theta)))
 
     def kernel(x0):
+        # Cast all scalar constants to x0.dtype to prevent float64 promotion
+        dt = x0.dtype
+        mu_min_arr = jnp.array(mu_min, dtype=dt)
+        mu_decay_arr = jnp.array(mu_decay, dtype=dt)
+        newton_tol_arr = jnp.array(newton_tol, dtype=dt)
+
         def cond(state):
             x, mu_next, mu_used, step, converged = state
             return jnp.logical_and(step < max_mu_steps, ~converged)
@@ -190,15 +200,15 @@ def _make_continuation_solver(
         def body(state):
             x, mu_next, _mu_used, step, _converged = state
             x_new = newton_solve(x, mu_next)
-            res = _residual_norm_at(x_new, mu_min)
-            converged = res < newton_tol
+            res = _residual_norm_at(x_new, mu_min_arr)
+            converged = res < newton_tol_arr
             # When converged, record mu_min as mu_used since that's the system
             # we tested against. Otherwise record the mu we actually solved at.
-            mu_used_new = jnp.where(converged, mu_min, mu_next)
-            mu_next_new = jnp.maximum(mu_next * mu_decay, mu_min)
+            mu_used_new = jnp.where(converged, mu_min_arr, mu_next)
+            mu_next_new = jnp.maximum(mu_next * mu_decay_arr, mu_min_arr)
             return x_new, mu_next_new, mu_used_new, step + 1, converged
 
-        mu_init_arr = jnp.array(mu_init, dtype=x0.dtype)
+        mu_init_arr = jnp.array(mu_init, dtype=dt)
         init = (x0, mu_init_arr, mu_init_arr, jnp.array(0), jnp.array(False))
         x_final, _mu_next, mu_used, num_steps, _converged = lax.while_loop(
             cond, body, init
