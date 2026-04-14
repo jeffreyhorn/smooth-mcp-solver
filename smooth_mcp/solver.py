@@ -88,8 +88,8 @@ def _make_newton_solver(
     Returns a function solve(x0, mu) -> x. The returned function is pure
     JAX and can be traced by jax.jit or used inside lax.while_loop.
 
-    For repeated solves with the same problem, use ``make_mcp_solver_diff``
-    which constructs the solver once at factory time and reuses it.
+    For repeated solves with the same problem, see ``make_mcp_solver_diff``
+    for a differentiable MCP solver interface.
     """
 
     def _residual(x, mu):

@@ -45,7 +45,7 @@ def smooth_min(a: jnp.ndarray, b: jnp.ndarray, mu: float) -> jnp.ndarray:
     s = jnp.sqrt((a - b) ** 2 + mu)
     denom = a + b + s
     abs_denom = jnp.maximum(jnp.abs(denom), jnp.sqrt(mu))
-    safe_denom = jnp.copysign(abs_denom, denom + 1e-300)
+    safe_denom = jnp.copysign(abs_denom, denom)
     return (4.0 * a * b - mu) / (2.0 * safe_denom)
 
 
