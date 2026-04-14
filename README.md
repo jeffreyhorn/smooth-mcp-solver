@@ -77,7 +77,7 @@ jax.config.update("jax_enable_x64", True)
 
 Both `solve_mcp` and `make_mcp_solver_diff` accept `F_fn` in two forms:
 
-- **`F(x)`** — for problems with no parameters. `theta` is optional and ignored.
+- **`F(x)`** — for problems with no parameters. With `solve_mcp`, `theta` is optional and ignored. With `make_mcp_solver_diff`, the returned `solve(l, u, x0, theta)` still requires a `theta` argument for JAX tracing — pass a dummy like `jnp.zeros(0)` if `F` does not use it.
 - **`F(x, theta)`** — for parametrized problems. Pass `theta` to differentiate through.
 
 The low-level `smoothed_residual` function requires the two-argument form `F(x, theta)`.
