@@ -58,7 +58,7 @@ def loss(th):
     return jnp.sum(solver(l, u, x0, th) ** 2)
 
 grad_fn = jax.grad(loss)
-bench("jax.grad(loss)(theta)", lambda: grad_fn(theta))
+eager_avg = bench("jax.grad(loss)(theta)", lambda: grad_fn(theta))
 
 print("\n=== jax.jit(jax.grad(...)) ===")
 jit_grad = jax.jit(grad_fn)
@@ -82,9 +82,14 @@ def _bench_varying():
     return jit_grad(theta_variants[i])
 
 
-bench("jit grad (cached, varying theta)", _bench_varying)
+jit_avg = bench("jit grad (cached, varying theta)", _bench_varying)
 
-print("\n=== Summary ===")
-print("  jax.jit(jax.grad(loss)) gives ~1000x speedup over eager jax.grad")
-print("  after the initial trace. Use make_mcp_solver_diff + jax.jit for")
-print("  best performance in training loops.")
+import platform
+
+print(f"\n=== Summary ({time.strftime('%Y-%m-%d')}) ===")
+print(f"  Platform: {platform.platform()}")
+print(f"  JAX: {jax.__version__}, Devices: {jax.devices()}")
+if jit_avg > 0:
+    speedup = eager_avg / jit_avg
+    print(f"  Measured speedup (eager grad vs jit grad): {speedup:.0f}x")
+print("  Use make_mcp_solver_diff + jax.jit for best performance in training loops.")

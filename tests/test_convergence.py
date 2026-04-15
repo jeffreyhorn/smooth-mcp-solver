@@ -213,6 +213,124 @@ class TestDiffSolverFailureModes:
         assert jnp.all(jnp.isfinite(grad)), f"Non-finite gradient at bound: {grad}"
 
 
+class TestSolveInfoMatchesSolveMcp:
+    """Verify that return_aux diagnostics match solve_mcp on the same problems."""
+
+    def test_converged_lcp(self):
+        """Fully converged LCP: all SolveInfo fields should match MCPResult."""
+
+        def F(x):
+            M = jnp.array([[2.0, -1.0], [-1.0, 3.0]])
+            return M @ x + jnp.array([1.0, -2.0])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.zeros(2)
+
+        result = solve_mcp(F, l, u, x0)
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        x_diff, info = solver(l, u, x0, jnp.zeros(0))
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert bool(info.converged) == result.converged
+        assert jnp.isclose(info.residual_norm, result.residual_norm, rtol=1e-3)
+
+    def test_converged_nonlinear(self):
+        """Converged nonlinear MCP with finite bounds."""
+
+        def F(x):
+            return x**3 - x - 1.0
+
+        l = jnp.array([0.0])
+        u = jnp.array([2.0])
+        x0 = jnp.array([1.0])
+
+        result = solve_mcp(F, l, u, x0)
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        x_diff, info = solver(l, u, x0, jnp.zeros(0))
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert bool(info.converged) == result.converged
+
+    def test_truncated_single_step(self):
+        """With max_mu_steps=1, solver is truncated. Info should reflect this."""
+
+        def F(x):
+            M = jnp.array([[2.0, -1.0], [-1.0, 3.0]])
+            return M @ x + jnp.array([1.0, -2.0])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.zeros(2)
+
+        result = solve_mcp(F, l, u, x0, max_mu_steps=1)
+        solver = make_mcp_solver_diff(F, max_mu_steps=1, return_aux=True)
+        x_diff, info = solver(l, u, x0, jnp.zeros(0))
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert int(info.num_steps) == 1
+        assert bool(info.converged) == result.converged
+
+    def test_truncated_two_steps(self):
+        """With max_mu_steps=2, partially converged."""
+
+        def F(x):
+            M = jnp.array([[2.0, -1.0], [-1.0, 3.0]])
+            return M @ x + jnp.array([1.0, -2.0])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.zeros(2)
+
+        result = solve_mcp(F, l, u, x0, max_mu_steps=2)
+        solver = make_mcp_solver_diff(F, max_mu_steps=2, return_aux=True)
+        x_diff, info = solver(l, u, x0, jnp.zeros(0))
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert bool(info.converged) == result.converged
+
+    def test_parametric_problem(self):
+        """Parametric F(x, theta) with return_aux."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        result = solve_mcp(F, l, u, x0, theta=theta)
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        x_diff, info = solver(l, u, x0, theta)
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert bool(info.converged) == result.converged
+
+    def test_grad_works_with_aux(self):
+        """jax.grad should work when return_aux=True (aux is not differentiated)."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0])
+
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        l = jnp.array([0.0])
+        u = jnp.full(1, jnp.inf)
+        x0 = jnp.ones(1)
+
+        def loss(th):
+            x, _info = solver(l, u, x0, th)
+            return jnp.sum(x**2)
+
+        grad = jax.grad(loss)(jnp.array([2.0]))
+        assert jnp.all(jnp.isfinite(grad))
+
+
 class TestInputValidation:
     """Test that invalid inputs produce clear errors."""
 
@@ -346,6 +464,47 @@ class TestInputValidation:
                 jnp.array([1.0]),
                 jnp.array([0.5]),
                 regularize=-1.0,
+            )
+
+
+class TestDiffSolverRuntimeValidation:
+    """Validate that the differentiable solver rejects invalid runtime inputs.
+
+    solve_mcp validates l/u shapes, x0 shape, NaN bounds, and bound ordering
+    at call time. The solver returned by make_mcp_solver_diff should apply the
+    same checks so users get clear errors instead of silent wrong results.
+    """
+
+    def _make_solver(self):
+        return make_mcp_solver_diff(lambda x: x)
+
+    def test_l_greater_than_u(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="Lower bounds must not exceed"):
+            solver(jnp.array([5.0]), jnp.array([3.0]), jnp.array([4.0]), jnp.zeros(0))
+
+    def test_mismatched_l_u_shapes(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="same shape"):
+            solver(jnp.zeros(2), jnp.zeros(3), jnp.zeros(2), jnp.zeros(0))
+
+    def test_mismatched_x0_shape(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="same shape as l"):
+            solver(jnp.zeros(2), jnp.full(2, jnp.inf), jnp.zeros(3), jnp.zeros(0))
+
+    def test_nan_lower_bound(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="must not contain NaN"):
+            solver(
+                jnp.array([jnp.nan]), jnp.array([1.0]), jnp.array([0.5]), jnp.zeros(0)
+            )
+
+    def test_nan_upper_bound(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="must not contain NaN"):
+            solver(
+                jnp.array([0.0]), jnp.array([jnp.nan]), jnp.array([0.5]), jnp.zeros(0)
             )
 
 

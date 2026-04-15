@@ -1,6 +1,6 @@
 # Improvement Plan (2026-04-13)
 
-Based on `docs/reviews/review.codex.2026-04-13.md`.
+Based on `docs/internal/reviews/review.codex.2026-04-13.md`.
 
 ## Phase 1: Lock In Regressions Before Refactoring
 

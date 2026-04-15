@@ -1,18 +1,35 @@
 """Differentiable MCP solver with implicit differentiation via custom_vjp."""
 
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
 from jax import custom_vjp
 from jax.scipy.sparse.linalg import cg, gmres
 
-from smooth_mcp.smoothing import smoothed_residual
-from smooth_mcp.solver import (
-    _make_continuation_solver,
-    _make_newton_solver,
-    _normalize_F,
+from smooth_mcp._kernel import (
+    make_continuation_solver,
+    make_newton_solver,
+    normalize_F,
+    validate_bounds_and_x0,
 )
+from smooth_mcp.smoothing import smoothed_residual
+
+
+class SolveInfo(NamedTuple):
+    """Auxiliary diagnostics from the differentiable solver.
+
+    Attributes:
+        mu_used: Terminal smoothing parameter actually reached.
+        num_steps: Total continuation steps taken.
+        residual_norm: Max absolute smoothed residual at the solution.
+        converged: True if residual_norm < newton_tol.
+    """
+
+    mu_used: jnp.ndarray
+    num_steps: jnp.ndarray
+    residual_norm: jnp.ndarray
+    converged: jnp.ndarray
 
 
 def make_mcp_solver_diff(
@@ -38,6 +55,7 @@ def make_mcp_solver_diff(
     cg_maxiter: int = 1000,
     precond: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None,
     differentiate_through_x0: bool = False,
+    return_aux: bool = False,
 ):
     """Factory that returns a differentiable MCP solver with custom_vjp.
 
@@ -77,13 +95,19 @@ def make_mcp_solver_diff(
         cg_maxiter: Adjoint CG max iterations (only used when adjoint_method="cg").
         precond: Optional preconditioner callable for the adjoint linear solve.
         differentiate_through_x0: If True, use straight-through estimator for x0 gradients.
+        return_aux: If True, the returned function returns (x_star, SolveInfo)
+            instead of just x_star. The SolveInfo fields are not differentiated.
 
     Returns:
-        A function solve(l, u, x0, theta) -> x_star that supports jax.grad.
+        If return_aux is False (default):
+            A function solve(l, u, x0, theta) -> x_star that supports jax.grad.
+        If return_aux is True:
+            A function solve(l, u, x0, theta) -> (x_star, SolveInfo).
+            Gradients flow through x_star only; SolveInfo is stopped.
         If F_fn takes only x, pass any array for theta (it will be ignored)
         but theta is still required for JAX tracing.
     """
-    F_fn_normalized = _normalize_F(F_fn)
+    F_fn_normalized = normalize_F(F_fn)
     if mu_init <= 0:
         raise ValueError(f"mu_init must be positive, got {mu_init}")
     if mu_min <= 0:
@@ -107,7 +131,7 @@ def make_mcp_solver_diff(
 
     def _run_forward(l, u, x0, theta):
         """Pure-JAX forward solve shared by solve() and _fwd()."""
-        newton = _make_newton_solver(
+        newton = make_newton_solver(
             F_fn_normalized,
             l,
             u,
@@ -122,7 +146,7 @@ def make_mcp_solver_diff(
             krylov_restart=krylov_restart,
             regularize=regularize,
         )
-        continuation = _make_continuation_solver(
+        continuation = make_continuation_solver(
             newton,
             F_fn_normalized,
             l,
@@ -199,4 +223,33 @@ def make_mcp_solver_diff(
         return (dl, du, d_x0, dtheta)
 
     solve.defvjp(_fwd, _bwd)
-    return solve
+
+    if return_aux:
+
+        def solve_checked(l, u, x0, theta):
+            l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
+            validate_bounds_and_x0(l, u, x0)
+            x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
+            mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
+            residual = smoothed_residual(
+                x_star, F_fn_normalized, l, u, mu_min_arr, theta
+            )
+            residual_norm = jnp.max(jnp.abs(residual))
+            converged = residual_norm < newton_tol
+            x_star_diff = solve(l, u, x0, theta)
+            aux = SolveInfo(
+                mu_used=jax.lax.stop_gradient(mu_used),
+                num_steps=jax.lax.stop_gradient(num_steps),
+                residual_norm=jax.lax.stop_gradient(residual_norm),
+                converged=jax.lax.stop_gradient(converged),
+            )
+            return x_star_diff, aux
+
+    else:
+
+        def solve_checked(l, u, x0, theta):
+            l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
+            validate_bounds_and_x0(l, u, x0)
+            return solve(l, u, x0, theta)
+
+    return solve_checked
