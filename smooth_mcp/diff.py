@@ -22,7 +22,7 @@ class SolveInfo(NamedTuple):
     Attributes:
         mu_used: Terminal smoothing parameter actually reached.
         num_steps: Total continuation steps taken.
-        residual_norm: Max absolute smoothed residual at the solution.
+        residual_norm: Max absolute smoothed residual at x_star, evaluated at mu_min.
         converged: True if residual_norm < newton_tol.
     """
 
