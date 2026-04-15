@@ -330,6 +330,45 @@ class TestSolveInfoMatchesSolveMcp:
         grad = jax.grad(loss)(jnp.array([2.0]))
         assert jnp.all(jnp.isfinite(grad))
 
+    def test_jit_works_with_aux(self):
+        """jax.jit should work when return_aux=True."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        result = solve_mcp(F, l, u, x0, theta=theta)
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        jit_solver = jax.jit(solver)
+        x_diff, info = jit_solver(l, u, x0, theta)
+
+        assert jnp.allclose(result.x, x_diff, atol=1e-10)
+        assert int(info.num_steps) == result.num_steps
+        assert bool(info.converged) == result.converged
+
+    def test_jit_grad_works_with_aux(self):
+        """jax.jit(jax.grad(...)) should work when loss ignores aux output."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0])
+
+        solver = make_mcp_solver_diff(F, return_aux=True)
+        l = jnp.array([0.0])
+        u = jnp.full(1, jnp.inf)
+        x0 = jnp.ones(1)
+
+        def loss(th):
+            x, _info = solver(l, u, x0, th)
+            return jnp.sum(x**2)
+
+        grad_fn = jax.jit(jax.grad(loss))
+        grad = grad_fn(jnp.array([2.0]))
+        assert jnp.all(jnp.isfinite(grad))
+
 
 class TestInputValidation:
     """Test that invalid inputs produce clear errors."""

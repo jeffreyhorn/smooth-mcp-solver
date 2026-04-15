@@ -160,19 +160,8 @@ def make_mcp_solver_diff(
         )
         return continuation(x0)  # (x_star, mu_used, num_steps)
 
-    @custom_vjp
-    def solve(l, u, x0, theta):
-        x_star, _mu_final, _num_steps = _run_forward(l, u, x0, theta)
-        return x_star
-
-    def _fwd(l, u, x0, theta):
-        x_star, mu_final, _num_steps = _run_forward(l, u, x0, theta)
-        return x_star, (x_star, mu_final, l, u, theta)
-
-    def _bwd(res, cotangent):
-        x_star, mu_final, l, u, theta = res
-        g = cotangent
-
+    def _compute_grads(x_star, mu_final, l, u, theta, g):
+        """Shared adjoint computation for the backward pass."""
         mu = mu_final
 
         def H_x(xx):
@@ -193,7 +182,6 @@ def make_mcp_solver_diff(
             return vjp_x_fn(v)[0]
 
         if adjoint_method == "cg":
-            # JAX CG returns info=None (no convergence tracking)
             lambda_star, _ = cg(JTv, g, tol=cg_tol, maxiter=cg_maxiter, M=precond)
         else:
             lambda_star, info = gmres(
@@ -204,7 +192,6 @@ def make_mcp_solver_diff(
                 maxiter=gmres_maxiter,
                 M=precond,
             )
-            # Propagate NaN if GMRES failed to converge (info != 0)
             lambda_star = jnp.where(
                 info == 0, lambda_star, jnp.full_like(lambda_star, jnp.nan)
             )
@@ -222,13 +209,10 @@ def make_mcp_solver_diff(
 
         return (dl, du, d_x0, dtheta)
 
-    solve.defvjp(_fwd, _bwd)
-
     if return_aux:
 
-        def solve_checked(l, u, x0, theta):
-            l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
-            validate_bounds_and_x0(l, u, x0)
+        @custom_vjp
+        def solve(l, u, x0, theta):
             x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
             mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
             residual = smoothed_residual(
@@ -236,20 +220,57 @@ def make_mcp_solver_diff(
             )
             residual_norm = jnp.max(jnp.abs(residual))
             converged = residual_norm < newton_tol
-            x_star_diff = solve(l, u, x0, theta)
             aux = SolveInfo(
                 mu_used=jax.lax.stop_gradient(mu_used),
                 num_steps=jax.lax.stop_gradient(num_steps),
                 residual_norm=jax.lax.stop_gradient(residual_norm),
                 converged=jax.lax.stop_gradient(converged),
             )
-            return x_star_diff, aux
+            return x_star, aux
+
+        def _fwd(l, u, x0, theta):
+            x_star, mu_final, num_steps = _run_forward(l, u, x0, theta)
+            mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
+            residual = smoothed_residual(
+                x_star, F_fn_normalized, l, u, mu_min_arr, theta
+            )
+            residual_norm = jnp.max(jnp.abs(residual))
+            converged = residual_norm < newton_tol
+            aux = SolveInfo(
+                mu_used=jax.lax.stop_gradient(mu_final),
+                num_steps=jax.lax.stop_gradient(num_steps),
+                residual_norm=jax.lax.stop_gradient(residual_norm),
+                converged=jax.lax.stop_gradient(converged),
+            )
+            return (x_star, aux), (x_star, mu_final, l, u, theta)
+
+        def _bwd(res, cotangent):
+            x_star, mu_final, l, u, theta = res
+            g_x, _g_aux = cotangent
+            return _compute_grads(x_star, mu_final, l, u, theta, g_x)
+
+        solve.defvjp(_fwd, _bwd)
 
     else:
 
-        def solve_checked(l, u, x0, theta):
-            l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
-            validate_bounds_and_x0(l, u, x0)
-            return solve(l, u, x0, theta)
+        @custom_vjp
+        def solve(l, u, x0, theta):
+            x_star, _mu_final, _num_steps = _run_forward(l, u, x0, theta)
+            return x_star
+
+        def _fwd(l, u, x0, theta):
+            x_star, mu_final, _num_steps = _run_forward(l, u, x0, theta)
+            return x_star, (x_star, mu_final, l, u, theta)
+
+        def _bwd(res, cotangent):
+            x_star, mu_final, l, u, theta = res
+            return _compute_grads(x_star, mu_final, l, u, theta, cotangent)
+
+        solve.defvjp(_fwd, _bwd)
+
+    def solve_checked(l, u, x0, theta):
+        l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
+        validate_bounds_and_x0(l, u, x0)
+        return solve(l, u, x0, theta)
 
     return solve_checked
