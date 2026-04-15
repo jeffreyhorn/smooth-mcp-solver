@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lint format test test-fast coverage clean
+.PHONY: help install install-dev lint typecheck format test test-fast coverage clean
 
 # Detect virtual environment
 VENV_BIN := $(shell if [ -d ".venv/bin" ]; then echo ".venv/bin/"; else echo ""; fi)
