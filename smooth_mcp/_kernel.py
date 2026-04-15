@@ -15,8 +15,8 @@ def validate_bounds_and_x0(l, u, x0):
     """Validate shapes, NaN, and ordering of bounds and initial guess.
 
     Shape checks always run. Value checks (NaN, ordering) are skipped
-    when inside a JAX tracing context (jit/grad), since they require
-    concrete values.
+    when inside any JAX tracing context (for example, jit, grad,
+    vmap, or pmap), since they require concrete values.
     """
     if l.shape != u.shape:
         raise ValueError(
