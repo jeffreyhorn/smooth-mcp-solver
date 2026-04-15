@@ -209,39 +209,29 @@ def make_mcp_solver_diff(
 
         return (dl, du, d_x0, dtheta)
 
+    def _make_aux(x_star, mu_used, num_steps, l, u, theta):
+        """Build stop-gradiented SolveInfo from forward results."""
+        mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
+        residual = smoothed_residual(x_star, F_fn_normalized, l, u, mu_min_arr, theta)
+        residual_norm = jnp.max(jnp.abs(residual))
+        converged = residual_norm < newton_tol
+        return SolveInfo(
+            mu_used=jax.lax.stop_gradient(mu_used),
+            num_steps=jax.lax.stop_gradient(num_steps),
+            residual_norm=jax.lax.stop_gradient(residual_norm),
+            converged=jax.lax.stop_gradient(converged),
+        )
+
     if return_aux:
 
         @custom_vjp
         def solve(l, u, x0, theta):
             x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
-            mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
-            residual = smoothed_residual(
-                x_star, F_fn_normalized, l, u, mu_min_arr, theta
-            )
-            residual_norm = jnp.max(jnp.abs(residual))
-            converged = residual_norm < newton_tol
-            aux = SolveInfo(
-                mu_used=jax.lax.stop_gradient(mu_used),
-                num_steps=jax.lax.stop_gradient(num_steps),
-                residual_norm=jax.lax.stop_gradient(residual_norm),
-                converged=jax.lax.stop_gradient(converged),
-            )
-            return x_star, aux
+            return x_star, _make_aux(x_star, mu_used, num_steps, l, u, theta)
 
         def _fwd(l, u, x0, theta):
             x_star, mu_final, num_steps = _run_forward(l, u, x0, theta)
-            mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
-            residual = smoothed_residual(
-                x_star, F_fn_normalized, l, u, mu_min_arr, theta
-            )
-            residual_norm = jnp.max(jnp.abs(residual))
-            converged = residual_norm < newton_tol
-            aux = SolveInfo(
-                mu_used=jax.lax.stop_gradient(mu_final),
-                num_steps=jax.lax.stop_gradient(num_steps),
-                residual_norm=jax.lax.stop_gradient(residual_norm),
-                converged=jax.lax.stop_gradient(converged),
-            )
+            aux = _make_aux(x_star, mu_final, num_steps, l, u, theta)
             return (x_star, aux), (x_star, mu_final, l, u, theta)
 
         def _bwd(res, cotangent):

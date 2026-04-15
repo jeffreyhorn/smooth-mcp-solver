@@ -1,5 +1,6 @@
 """Benchmark repeated solve_mcp and differentiable solve calls."""
 
+import platform
 import time
 
 import jax
@@ -83,8 +84,6 @@ def _bench_varying():
 
 
 jit_avg = bench("jit grad (cached, varying theta)", _bench_varying)
-
-import platform
 
 print(f"\n=== Summary ({time.strftime('%Y-%m-%d')}) ===")
 print(f"  Platform: {platform.platform()}")
