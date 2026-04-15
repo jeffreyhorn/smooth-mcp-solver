@@ -177,12 +177,12 @@ Caveats:
 
 ### Input validation
 
-Both `solve_mcp` and `make_mcp_solver_diff` validate inputs eagerly (outside JIT):
+Both `solve_mcp` and `make_mcp_solver_diff` validate inputs eagerly in fully non-traced execution:
 - Shape checks: `l`, `u`, and `x0` must all have the same shape.
 - NaN checks: `l` and `u` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
-When the differentiable solver is called inside `jax.jit`, shape checks still run (shapes are static in JAX), but value-dependent checks (NaN, bound ordering) are skipped because the values are not available during tracing.
+In any JAX tracing context (for example `jax.jit`, `jax.grad`, `jax.value_and_grad`, or `jax.vmap` when arguments are tracers), shape checks still run because shapes are available statically, but value-dependent checks (NaN, bound ordering) are skipped because concrete values are not available during tracing.
 
 ### Solver options
 

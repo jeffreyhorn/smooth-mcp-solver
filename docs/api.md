@@ -135,12 +135,12 @@ Both solvers accept `F_fn` in two forms:
 
 ## Input validation
 
-Both APIs validate inputs eagerly (outside JIT):
+Both APIs validate inputs eagerly during non-traced execution:
 - Shape checks: `l`, `u`, and `x0` must have the same shape.
 - NaN checks: `l` and `u` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
-Inside `jax.jit`, shape checks still run (shapes are static) but value checks are skipped.
+Under JAX tracing transforms (for example `jax.jit`, `jax.grad`, or `jax.vmap`), shape checks still run when shapes are available, but value checks are skipped.
 
 ## Comparing `solve_mcp` and `make_mcp_solver_diff`
 

@@ -212,9 +212,10 @@ def make_mcp_solver_diff(
     def _make_aux(x_star, mu_used, num_steps, l, u, theta):
         """Build stop-gradiented SolveInfo from forward results."""
         mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
+        newton_tol_arr = jnp.array(newton_tol, dtype=x_star.dtype)
         residual = smoothed_residual(x_star, F_fn_normalized, l, u, mu_min_arr, theta)
         residual_norm = jnp.max(jnp.abs(residual))
-        converged = residual_norm < newton_tol
+        converged = residual_norm < newton_tol_arr
         return SolveInfo(
             mu_used=jax.lax.stop_gradient(mu_used),
             num_steps=jax.lax.stop_gradient(num_steps),
