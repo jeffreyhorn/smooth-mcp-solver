@@ -34,6 +34,7 @@ Plus all [common solver options](#common-solver-options) and [forward linear sol
 Factory that returns a differentiable MCP solver with `custom_vjp`. The returned function supports `jax.grad`, `jax.jit`, and `jax.vmap`.
 
 ```python
+import jax
 from smooth_mcp import make_mcp_solver_diff
 
 solver = make_mcp_solver_diff(F)

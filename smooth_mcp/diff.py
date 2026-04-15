@@ -259,7 +259,12 @@ def make_mcp_solver_diff(
         solve.defvjp(_fwd, _bwd)
 
     def solve_checked(l, u, x0, theta):
-        l, u, x0 = jnp.asarray(l), jnp.asarray(u), jnp.asarray(x0)
+        l, u, x0, theta = (
+            jnp.asarray(l),
+            jnp.asarray(u),
+            jnp.asarray(x0),
+            jnp.asarray(theta),
+        )
         validate_bounds_and_x0(l, u, x0)
         return solve(l, u, x0, theta)
 

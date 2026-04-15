@@ -40,7 +40,7 @@ jax.jit(solver)(l, u, x0, theta)          # works
 
 ## Slow performance
 
-- **Always JIT in loops**: `jax.jit(jax.grad(loss))` is ~1000x faster than eager `jax.grad` after the initial trace.
+- **Always JIT in loops**: `jax.jit(jax.grad(loss))` is often orders of magnitude faster than eager `jax.grad` after the initial trace.
 - **Faster continuation**: Try `mu_decay=0.25` or `0.1` to reduce step count.
 - **Large problems**: Switch to `linear_solver="gmres"` for n > ~100 to avoid O(n^3) Jacobian construction.
 - **First call is slow**: The first JIT call includes tracing. Subsequent calls with the same input shapes are fast.
