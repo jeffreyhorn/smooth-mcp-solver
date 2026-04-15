@@ -35,10 +35,23 @@ Factory that returns a differentiable MCP solver with `custom_vjp`. The returned
 
 ```python
 import jax
+import jax.numpy as jnp
 from smooth_mcp import make_mcp_solver_diff
+
+def F(x, theta):
+    return x - theta
+
+l = jnp.array([0.0, 0.0])
+u = jnp.full(2, jnp.inf)
+x0 = jnp.array([0.5, 0.5])
+theta = jnp.array([1.0, 2.0])
 
 solver = make_mcp_solver_diff(F)
 x_star = solver(l, u, x0, theta)         # forward solve
+
+def loss(theta):
+    return jnp.sum(solver(l, u, x0, theta) ** 2)
+
 grad = jax.grad(loss)(theta)              # implicit differentiation
 ```
 
