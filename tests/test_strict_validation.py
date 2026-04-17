@@ -348,21 +348,17 @@ class TestStrictCheckify:
     def test_checkify_of_vmap_raises_at_trace(self):
         """Documented caveat: checkify(vmap(...)) is rejected by JAX.
 
-        The factory returns the inner-checkify form, so wrapping it again
-        in vmap and then checkify must fail at trace time with a clear
-        error. Users should use vmap(solver) instead.
+        Simulate the user-facing bad ordering directly: start from a
+        non-checkified solver, apply ``vmap``, then wrap the result with
+        ``checkify.checkify``. That composition must fail at trace time.
+        Users should use the factory's ``strict_validation="checkify"``
+        solver directly under ``vmap`` instead.
         """
-        solver = _make_checkify()
-        # wrapping checkify around vmap of an already-checkified function
-        # and calling it should blow up at trace.
-        bad = jax.vmap(solver)
-        # Re-checkify-ing is not the pattern users hit; the failure mode
-        # is really "user checkifies the solver after vmap". Simulate that
-        # by calling vmap on the underlying unchecked path + checkify.
-        # Build a solver without checkify and reproduce the bad ordering:
         from jax.experimental import checkify
 
-        raw = make_mcp_solver_diff(_F, strict_validation=True)
+        # Build a solver without checkify and reproduce the bad ordering:
+        # checkify(vmap(raw)).
+        raw = make_mcp_solver_diff(_F, strict_validation=False)
         bad = checkify.checkify(jax.vmap(raw))
         with pytest.raises(ValueError):
             bad(
