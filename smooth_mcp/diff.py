@@ -102,9 +102,13 @@ def make_mcp_solver_diff(
         return_aux: If True, the returned function returns (x_star, SolveInfo)
             instead of just x_star. The SolveInfo fields are not differentiated.
         strict_validation: Controls validation of bounds inside traced code
-            (jit, grad, vmap). Eager validation always runs and raises on
-            invalid inputs; this knob only affects what happens when the
-            inputs are tracers.
+            (jit, grad, vmap). Outside tracing, the usual eager validation
+            still runs; for False/True modes invalid value inputs raise
+            immediately, while in "checkify" mode invalid value checks are
+            reported via the returned Error object rather than raising
+            ValueError automatically (shape mismatches may still raise during
+            tracing). This knob mainly affects what happens when the inputs
+            are tracers.
               - False (default): value checks are skipped under tracing
                 (current behavior).
               - True: NaN-poisoning. Sanitizes l/u so the inner solve cannot

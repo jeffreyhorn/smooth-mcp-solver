@@ -69,9 +69,12 @@ def make_mcp_solver(
         return_aux: If True, the returned function returns (x_star, SolveInfo)
             instead of just x_star.
         strict_validation: Controls validation of bounds inside traced code
-            (jit, vmap). Eager validation always runs and raises on invalid
-            inputs; this knob only affects what happens when the inputs are
-            tracers.
+            (jit, vmap). For ordinary eager calls, invalid-value checks still
+            run before the solve in the default and NaN-poisoning modes and
+            raise on invalid inputs. In "checkify" mode, invalid value checks
+            are reported via the returned Error rather than an eager
+            ValueError, although tracing-time issues such as shape mismatches
+            can still raise during tracing.
               - False (default): value checks are skipped under tracing.
               - True: NaN-poisoning. Sanitizes l/u so the inner solve cannot
                 blow up, runs the solve, then replaces x_star with NaN (and
