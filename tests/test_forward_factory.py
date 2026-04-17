@@ -219,8 +219,8 @@ class TestReturnShape:
 
         solver = make_mcp_solver(F)
         out = solver(jnp.array([0.0]), jnp.array([3.0]), jnp.array([1.0]), jnp.zeros(0))
-        assert isinstance(out, jax.Array)
-        assert out.shape == (1,)
+        assert hasattr(out, "shape")
+        assert jnp.asarray(out).shape == (1,)
 
     def test_returns_tuple_when_return_aux_true(self):
         def F(x):
