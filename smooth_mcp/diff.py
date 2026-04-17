@@ -117,9 +117,10 @@ def make_mcp_solver_diff(
                 runtime error. The returned function's signature changes to
                 (l, u, x0, theta) -> (Error, x_star) (or (Error, (x_star,
                 SolveInfo)) when return_aux=True). Call err.throw() to
-                raise. Composes with jit and grad. For vmap, use
-                vmap(solver(...)) ordering, not checkify(vmap(...)) — the
-                kernel uses lax.while_loop, which JAX rejects under
+                raise. Composes with jit and grad. For vmap, first form a
+                batched solver with jax.vmap(solver); avoid
+                checkify.checkify(jax.vmap(...)) — the kernel uses
+                lax.while_loop, which JAX rejects under
                 checkify-of-vmap-of-while. See docs/api.md.
 
     Returns:
@@ -313,9 +314,7 @@ def make_mcp_solver_diff(
     def _checks(l, u):
         checkify.check(~jnp.any(jnp.isnan(l)), "l contains NaN")
         checkify.check(~jnp.any(jnp.isnan(u)), "u contains NaN")
-        checkify.check(
-            jnp.all(l <= u), "l must be <= u element-wise"
-        )
+        checkify.check(jnp.all(l <= u), "l must be <= u element-wise")
 
     def solve_checked(l, u, x0, theta):
         l, u, x0, theta = (
@@ -330,6 +329,7 @@ def make_mcp_solver_diff(
         return solve(l, u, x0, theta)
 
     if strict_validation == "checkify":
+
         def _checkify_target(l, u, x0, theta):
             l = jnp.asarray(l)
             u = jnp.asarray(u)

@@ -46,8 +46,13 @@ def preflight_validate(l, u, x0):
     ``ValueError`` on invalid shapes, NaN bounds, or ``l > u``.
 
     Under tracing, value checks are silently skipped (same convention as
-    the solver factories). For strict checking inside traced code, use
-    ``strict_validation=True`` on ``make_mcp_solver_diff`` instead.
+    the solver factories). Supported validation options are:
+
+    * Call ``preflight_validate`` eagerly before entering traced code.
+    * Use ``strict_validation=True`` on ``make_mcp_solver`` or
+      ``make_mcp_solver_diff``.
+    * Use ``strict_validation="checkify"`` on ``make_mcp_solver`` or
+      ``make_mcp_solver_diff``.
     """
     l_arr = jnp.asarray(l)
     u_arr = jnp.asarray(u)
@@ -62,11 +67,7 @@ def traced_invalid_mask(l, u):
     Used by NaN-poisoning strict validation; safe to trace under jit,
     grad, and vmap.
     """
-    return (
-        jnp.any(jnp.isnan(l))
-        | jnp.any(jnp.isnan(u))
-        | jnp.any(l > u)
-    )
+    return jnp.any(jnp.isnan(l)) | jnp.any(jnp.isnan(u)) | jnp.any(l > u)
 
 
 def sanitize_bounds(l, u):

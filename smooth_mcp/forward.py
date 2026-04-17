@@ -204,6 +204,7 @@ def make_mcp_solver(
         return _solve(l, u, x0, theta)
 
     if strict_validation == "checkify":
+
         def _checkify_target(l, u, x0, theta):
             l = jnp.asarray(l)
             u = jnp.asarray(u)

@@ -6,7 +6,6 @@ import jax.numpy as jnp
 from smooth_mcp import make_mcp_solver_diff
 from smooth_mcp.diff import SolveInfo
 
-
 # -- Problem definitions ---------------------------------------------------
 
 
@@ -231,9 +230,7 @@ class TestVmapBatchedGradients:
 
         def batched_loss(theta_batch):
             # theta_batch is (3, 1); vmap over batch dim
-            xs = jax.vmap(solver, in_axes=(None, None, None, 0))(
-                l, u, x0, theta_batch
-            )
+            xs = jax.vmap(solver, in_axes=(None, None, None, 0))(l, u, x0, theta_batch)
             return jnp.sum(xs**2)
 
         thetas = jnp.array([[1.0], [2.0], [3.0]])

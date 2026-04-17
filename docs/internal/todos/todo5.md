@@ -1,6 +1,6 @@
-# Todo 4: Address Review Findings from 2026-04-16
+# Todo 5: Address Review Findings from 2026-04-16
 
-This plan addresses the issues documented in `docs/reviews/review.codex.2026-04-16.md`.
+This plan addresses the issues documented in `docs/internal/reviews/review.codex.2026-04-16.md`.
 
 ## Phase 1: Reduce the traced-validation risk
 
