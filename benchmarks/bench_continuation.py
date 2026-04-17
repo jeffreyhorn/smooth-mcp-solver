@@ -99,7 +99,7 @@ def _make_random_lcp(n=30, seed=0):
     different regime from the obstacle problem — no spatial structure,
     full-rank coupling across all components.
     """
-    key = jax.random.key(seed)
+    key = jax.random.PRNGKey(seed)
     k1, k2 = jax.random.split(key)
     A = jax.random.normal(k1, (n, n))
     M = A @ A.T + 0.1 * jnp.eye(n)

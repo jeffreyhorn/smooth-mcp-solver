@@ -151,7 +151,7 @@ hardware, and problem structure.*
 | `"gmres"` | O(n * k) per Newton step | n > ~100 or sparse Jacobians. Matrix-free via JVPs. |
 
 If using `"gmres"` and Newton convergence is slow, tune:
-- `krylov_tol`: Loosen (e.g., `1e-4`) if inner solves are too expensive, tighten if Newton steps are inaccurate. **Important:** `krylov_tol` must be at or below `newton_tol` for the outer solve to converge. The default `krylov_tol=1e-6` is too loose when `newton_tol=1e-10` — the residual will stall (benchmarked on `obstacle_100d`).
+- `krylov_tol`: Loosen (e.g., `1e-4`) if inner solves are too expensive, tighten if Newton steps are inaccurate. `krylov_tol` is the GMRES linear-solve tolerance, while `newton_tol` is a nonlinear residual threshold, so they are not directly comparable. In practice, if you target a very small `newton_tol`, you may need to tighten `krylov_tol` as well; on `obstacle_100d`, the default `krylov_tol=1e-6` was too loose when `newton_tol=1e-10`, and the residual stalled (benchmarked).
 - `krylov_maxiter`: Increase for hard linear systems.
 - `krylov_restart`: Increase (e.g., `50`, `100`) if GMRES stalls.
 
