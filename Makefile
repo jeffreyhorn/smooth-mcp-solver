@@ -20,9 +20,9 @@ help:
 	@echo ""
 	@echo "Note: If .venv/ exists, it will be used automatically"
 
-# Install the package
+# Install the package (non-editable, matches "pip install ." in docs)
 install:
-	$(PIP) install -e .
+	$(PIP) install .
 
 # Install with development dependencies
 install-dev:

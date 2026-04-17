@@ -35,6 +35,55 @@ def validate_bounds_and_x0(l, u, x0):
         pass
 
 
+def preflight_validate(l, u, x0):
+    """Eagerly validate bounds and initial guess, raising on invalid input.
+
+    Intended for users whose bounds are static across a training loop: call
+    this once before entering a jitted/vmapped inner loop to verify inputs
+    up front, with zero per-call overhead inside the traced region.
+
+    Accepts array-likes (lists, scalars, numpy or JAX arrays). Raises
+    ``ValueError`` on invalid shapes, NaN bounds, or ``l > u``.
+
+    Under tracing, value checks are silently skipped (same convention as
+    the solver factories). For strict checking inside traced code, use
+    ``strict_validation=True`` on ``make_mcp_solver_diff`` instead.
+    """
+    l_arr = jnp.asarray(l)
+    u_arr = jnp.asarray(u)
+    x0_arr = jnp.asarray(x0)
+    validate_bounds_and_x0(l_arr, u_arr, x0_arr)
+
+
+def traced_invalid_mask(l, u):
+    """Return a scalar JAX bool that is True when bounds are invalid.
+
+    Detects: NaN in ``l``, NaN in ``u``, or any element with ``l > u``.
+    Used by NaN-poisoning strict validation; safe to trace under jit,
+    grad, and vmap.
+    """
+    return (
+        jnp.any(jnp.isnan(l))
+        | jnp.any(jnp.isnan(u))
+        | jnp.any(l > u)
+    )
+
+
+def sanitize_bounds(l, u):
+    """Replace NaNs and fix ordering so the solver sees well-defined inputs.
+
+    This is only meaningful paired with ``traced_invalid_mask``: the
+    sanitized values keep the solver from producing internal NaNs in the
+    invalid branch, and the caller then replaces the output with NaN when
+    the mask is True.
+    """
+    safe_l = jnp.where(jnp.isnan(l), jnp.zeros_like(l), l)
+    safe_u = jnp.where(jnp.isnan(u), jnp.ones_like(u), u)
+    lo = jnp.minimum(safe_l, safe_u)
+    hi = jnp.maximum(safe_l, safe_u)
+    return lo, hi
+
+
 def normalize_F(F_fn):
     """Wrap F_fn to always accept (x, theta) as positional arguments.
 
