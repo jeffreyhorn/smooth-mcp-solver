@@ -2,6 +2,18 @@
 
 ## Solvers
 
+### Choosing an entry point
+
+The package exposes three solver entry points. Pick one based on what you need:
+
+| Use case | Entry point | Why |
+|---|---|---|
+| One-off solve, debugging, exploration | `solve_mcp` | Eager; returns Python-scalar diagnostics; supports `verbose=True` per-step prints |
+| Repeated forward solves (no gradients) | `make_mcp_solver` wrapped in `jax.jit` | Reusable JIT-compatible forward factory; no `custom_vjp` overhead |
+| Differentiable / gradient-based training | `make_mcp_solver_diff` wrapped in `jax.jit` | Implicit differentiation with `custom_vjp`; supports `jax.grad`, `jax.vmap`, `jax.jit` |
+
+The two factories share option names with `solve_mcp`. Moving from `solve_mcp` to `make_mcp_solver` is mostly mechanical (`make_mcp_solver` requires `theta`; pass `jnp.zeros(0)` for single-argument `F(x)`). Moving from `make_mcp_solver` to `make_mcp_solver_diff` is the same call shape plus the differentiability; no forward-path changes are needed.
+
 ### `solve_mcp(F_fn, l, u, x0, ...)`
 
 Solve a Mixed Complementarity Problem. Returns an `MCPResult`.
@@ -29,9 +41,52 @@ result = solve_mcp(F, l, u, x0)
 
 Plus all [common solver options](#common-solver-options) and [forward linear solver options](#forward-linear-solver-options).
 
+### `make_mcp_solver(F_fn, ...)`
+
+Factory that returns a reusable forward-only MCP solver. The returned function is JIT-compatible but does not install a `custom_vjp` — use `make_mcp_solver_diff` if you need `jax.grad`.
+
+```python
+import jax
+import jax.numpy as jnp
+from smooth_mcp import make_mcp_solver
+
+def F(x, theta):
+    return x - theta
+
+l = jnp.array([0.0, 0.0])
+u = jnp.full(2, jnp.inf)
+x0 = jnp.array([0.5, 0.5])
+theta = jnp.array([1.0, 2.0])
+
+solver = jax.jit(make_mcp_solver(F))        # wrap in jax.jit for repeated solves
+x_star = solver(l, u, x0, theta)             # first call traces
+x_star = solver(l, u, x0, theta + 0.1)       # subsequent calls reuse compiled graph
+```
+
+For diagnostics, build the factory with `return_aux=True`:
+
+```python
+solver = jax.jit(make_mcp_solver(F, return_aux=True))
+x_star, info = solver(l, u, x0, theta)
+# info.converged, info.residual_norm, info.num_steps, info.mu_used are JAX arrays
+```
+
+**Arguments:** All [common solver options](#common-solver-options), [forward linear solver options](#forward-linear-solver-options), plus:
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `return_aux` | bool | `False` | Return `(x_star, SolveInfo)` instead of just `x_star` |
+| `strict_validation` | bool or str | `False` | Opt-in traced validation — see [Input validation](#input-validation) |
+
+**Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`). If `strict_validation="checkify"`, the signature is wrapped to return `(Error, ...)` per `jax.experimental.checkify` conventions.
+
+**Note:** The returned function is not auto-JIT-wrapped. Wrap it in `jax.jit(...)` yourself for repeated fast forward solves. Without `jax.jit`, each call rebuilds the Newton and continuation kernels.
+
 ### `make_mcp_solver_diff(F_fn, ...)`
 
-Factory that returns a differentiable MCP solver with `custom_vjp`. The returned function supports `jax.grad`, `jax.jit`, and `jax.vmap`.
+Factory that returns a differentiable MCP solver with `custom_vjp`. The returned function supports `jax.grad` / `jax.value_and_grad`, `jax.jit`, and `jax.vmap`.
+
+Gradients flow w.r.t. `theta`, `l`, and `u` by default. To also differentiate w.r.t. `x0`, set `differentiate_through_x0=True`.
 
 ```python
 import jax
@@ -61,8 +116,8 @@ grad = jax.grad(loss)(theta)              # implicit differentiation
 |---|---|---|---|
 | `adjoint_method` | str | `"gmres"` | Adjoint solver: `"gmres"` (general) or `"cg"` (SPD only) |
 | `gmres_tol` | float | `1e-8` | Adjoint GMRES tolerance |
-| `gmres_restart` | int | `30` | Adjoint GMRES restart parameter |
 | `gmres_maxiter` | int | `500` | Adjoint GMRES max iterations |
+| `gmres_restart` | int | `30` | Adjoint GMRES restart parameter |
 | `cg_tol` | float | `1e-8` | Adjoint CG tolerance |
 | `cg_maxiter` | int | `1000` | Adjoint CG max iterations |
 | `precond` | callable or None | `None` | Preconditioner `M(v) -> v` for adjoint solve |
@@ -71,7 +126,7 @@ grad = jax.grad(loss)(theta)              # implicit differentiation
 
 **Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`).
 
-**Note:** `solve_mcp` cannot be JIT-compiled because it returns Python scalars. Use `make_mcp_solver_diff` for JIT-compatible code.
+**Note:** `solve_mcp` cannot be JIT-compiled because it returns Python scalars. Use `make_mcp_solver` (forward-only) or `make_mcp_solver_diff` (differentiable) for JIT-compatible code.
 
 ## Data types
 
@@ -101,7 +156,7 @@ NamedTuple returned alongside `x_star` when `return_aux=True`.
 
 ## Common solver options
 
-Accepted by both `solve_mcp` and `make_mcp_solver_diff`:
+Accepted by `solve_mcp`, `make_mcp_solver`, and `make_mcp_solver_diff`:
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -116,7 +171,7 @@ Accepted by both `solve_mcp` and `make_mcp_solver_diff`:
 
 ## Forward linear solver options
 
-Accepted by both `solve_mcp` and `make_mcp_solver_diff`:
+Accepted by `solve_mcp`, `make_mcp_solver`, and `make_mcp_solver_diff`:
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -141,30 +196,112 @@ These are also exported from `smooth_mcp`:
 
 ## Function signatures
 
-Both solvers accept `F_fn` in two forms:
+All three entry points accept `F_fn` in two forms:
 
-- **`F(x)`** — for problems with no parameters. With `solve_mcp`, `theta` is optional. With `make_mcp_solver_diff`, pass a dummy `theta` (e.g., `jnp.zeros(0)`) since the returned function always requires four arguments for JAX tracing.
+- **`F(x)`** — for problems with no parameters. With `solve_mcp`, `theta` is optional. With `make_mcp_solver` and `make_mcp_solver_diff`, pass a dummy `theta` (e.g., `jnp.zeros(0)`) since the returned function always requires four arguments for JAX tracing.
 - **`F(x, theta)`** — for parametrized problems.
 
 ## Input validation
 
-Both APIs validate inputs eagerly during non-traced execution:
-- Shape checks: `l`, `u`, and `x0` must have the same shape.
+All three entry points enforce three checks on `l`, `u`, and `x0`:
+- Shape checks: all three arrays must have the same shape.
 - NaN checks: `l` and `u` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
-Under JAX tracing transforms (for example `jax.jit`, `jax.grad`, or `jax.vmap`), shape checks still run when shapes are available, but value checks are skipped.
+Shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
 
-## Comparing `solve_mcp` and `make_mcp_solver_diff`
+- **Eager execution** — full value checks run. Invalid input raises `ValueError`.
+- **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — by default, value checks are **silently skipped** because concrete values are not available during tracing. Invalid bounds can flow through a jitted training step without a hard failure.
 
-| | `solve_mcp` | `make_mcp_solver_diff` |
-|---|---|---|
-| **Returns** | `MCPResult` (Python scalars) | JAX array `x_star` (or `(x_star, SolveInfo)`) |
-| **Gradients** | No | Yes (`jax.grad`, `jax.vjp`) |
-| **JIT-compatible** | No | Yes |
-| **Input validation** | Full (shapes, NaN, bounds) | Full when eager; shape-only under JIT |
-| **Diagnostics** | `MCPResult.converged`, `.residual_norm`, `.num_steps` | `SolveInfo` via `return_aux=True` |
-| **Verbose output** | `verbose=True` prints per-step progress | Not available (use `solve_mcp` for debugging) |
-| **`theta` argument** | Optional (can omit if `F` takes only `x`) | Required (pass `jnp.zeros(0)` as dummy) |
+Three opt-in mechanisms cover the traced case. Pick the one that matches your pipeline:
 
-Use `solve_mcp` for one-off solves, debugging, and exploration. Use `make_mcp_solver_diff` for gradient-based optimization, JIT compilation, and production training loops.
+### 1. `preflight_validate(l, u, x0)` — cheapest, for static bounds
+
+If your bounds do not change across a training loop, call `preflight_validate` once before entering the loop. Zero overhead inside the jitted region.
+
+```python
+from smooth_mcp import make_mcp_solver_diff, preflight_validate
+import jax
+
+preflight_validate(l, u, x0)  # raises ValueError on invalid input
+solver = jax.jit(make_mcp_solver_diff(F))
+for step in range(n_steps):
+    x_star = solver(l, u, x0, thetas[step])
+```
+
+Use this whenever `l`, `u`, and `x0` are known up front and stay constant.
+
+### 2. `strict_validation=True` — NaN-poisoning, composes with `vmap`
+
+When bounds are themselves traced (learned, batched, or swept with `vmap`), opt into NaN-poisoning. The factory sanitizes `l`/`u` so the inner solve is well-defined, then replaces the output with NaN when the original input was invalid. With `return_aux=True`, `SolveInfo.converged` is forced to `False` and `residual_norm` to `NaN` on bad rows.
+
+Both `make_mcp_solver` and `make_mcp_solver_diff` accept `strict_validation`:
+
+```python
+# Forward-only:
+solver = make_mcp_solver(F, strict_validation=True, return_aux=True)
+x, info = jax.jit(solver)(l, u, x0, theta)
+
+# Differentiable:
+solver = make_mcp_solver_diff(F, strict_validation=True, return_aux=True)
+x, info = jax.jit(solver)(l, u, x0, theta)
+# info.converged == False for any invalid row under vmap
+```
+
+Composes with `jit`, `grad`, `vmap`, and their combinations at near-zero overhead. Failure surfaces as `NaN` output and `SolveInfo.converged=False`, not as an exception — callers must inspect the result.
+
+### 3. `strict_validation="checkify"` — exception-style, with a `vmap` caveat
+
+For users who want a raised exception rather than a silent NaN, use checkify mode. The factory returns a function whose signature is wrapped per `jax.experimental.checkify` conventions: `(l, u, x0, theta) -> (Error, x_star)` (or `(Error, (x_star, SolveInfo))` when `return_aux=True`).
+
+```python
+solver = make_mcp_solver_diff(F, strict_validation="checkify")
+err, x = solver(l, u, x0, theta)
+err.throw()  # raises JaxRuntimeError on invalid input
+```
+
+Composes with `jit` and `grad`. For `vmap`, the ordering matters:
+
+```python
+# CORRECT — vmap(solver)
+batched = jax.vmap(solver)
+errs, xs = batched(ls, us, x0s, thetas)
+errs.throw()  # reports "at mapped index N: ..." per bad row
+
+# WRONG — checkify(vmap(...)) fails at trace time:
+#   ValueError: Checkify does not support batched while-loops
+# The continuation kernel uses lax.while_loop, which JAX rejects under
+# checkify-of-vmap-of-while. Put checkify on the inside.
+```
+
+Per-call overhead on a small 1D problem is about 16% under warm `jit`; negligible for real workloads.
+
+### Which to use
+
+| Situation | Mechanism |
+|---|---|
+| Bounds static across a training loop | `preflight_validate` before the loop |
+| Bounds traced, batched, or swept; want composability | `strict_validation=True` |
+| Want raised exceptions on invalid input | `strict_validation="checkify"` |
+| Debugging / one-off solves | `solve_mcp` (always eager, always checks) |
+
+## Comparing the three entry points
+
+| | `solve_mcp` | `make_mcp_solver` | `make_mcp_solver_diff` |
+|---|---|---|---|
+| **Returns** | `MCPResult` (Python scalars) | JAX array `x_star` (or `(x_star, SolveInfo)`) | JAX array `x_star` (or `(x_star, SolveInfo)`) |
+| **Gradients** | No | No | Yes (`jax.grad`, `jax.value_and_grad`, `jax.vjp`) |
+| **JIT-compatible** | No | Yes (wrap in `jax.jit`) | Yes (wrap in `jax.jit`) |
+| **Input validation** | Full (shapes, NaN, bounds) | Full when eager; shape-only under JIT by default, opt-in strict modes | Full when eager; shape-only under JIT by default, opt-in strict modes |
+| **Diagnostics** | `MCPResult.converged`, `.residual_norm`, `.num_steps` | `SolveInfo` via `return_aux=True` | `SolveInfo` via `return_aux=True` |
+| **Verbose output** | `verbose=True` prints per-step progress | Not available | Not available |
+| **`theta` argument** | Optional (can omit if `F` takes only `x`) | Required (pass `jnp.zeros(0)` as dummy) | Required (pass `jnp.zeros(0)` as dummy) |
+| **Reusable across calls** | No (rebuilds every call) | Yes (under `jax.jit`, compiled graph is reused) | Yes (under `jax.jit`, compiled graph is reused) |
+| **`custom_vjp` overhead** | n/a | No | Yes (negligible on the forward path) |
+
+**When to reach for which:**
+- One-off solve, debugging, interactive exploration: **`solve_mcp`**.
+- Repeated forward solves with no gradients (e.g. a search sweep, batched evaluation, Monte Carlo, or a training loop where only `F`'s parameters change): **`make_mcp_solver` wrapped in `jax.jit`**.
+- Gradient-based training, implicit differentiation, or any workflow that uses `jax.grad` through the MCP solution: **`make_mcp_solver_diff` wrapped in `jax.jit`**.
+
+The two factories produce the same forward solution as `solve_mcp` on the same inputs. See `tests/test_forward_factory.py` for the field-by-field parity contract.

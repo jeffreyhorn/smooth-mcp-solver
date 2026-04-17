@@ -1,16 +1,19 @@
 """Differentiable MCP solver with implicit differentiation via custom_vjp."""
 
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional, Union
 
 import jax
 import jax.numpy as jnp
 from jax import custom_vjp
+from jax.experimental import checkify
 from jax.scipy.sparse.linalg import cg, gmres
 
 from smooth_mcp._kernel import (
     make_continuation_solver,
     make_newton_solver,
     normalize_F,
+    sanitize_bounds,
+    traced_invalid_mask,
     validate_bounds_and_x0,
 )
 from smooth_mcp.smoothing import smoothed_residual
@@ -56,6 +59,7 @@ def make_mcp_solver_diff(
     precond: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None,
     differentiate_through_x0: bool = False,
     return_aux: bool = False,
+    strict_validation: Union[bool, str] = False,
 ):
     """Factory that returns a differentiable MCP solver with custom_vjp.
 
@@ -97,6 +101,31 @@ def make_mcp_solver_diff(
         differentiate_through_x0: If True, use straight-through estimator for x0 gradients.
         return_aux: If True, the returned function returns (x_star, SolveInfo)
             instead of just x_star. The SolveInfo fields are not differentiated.
+        strict_validation: Controls validation of bounds inside traced code
+            (jit, grad, vmap). Outside tracing, the usual eager validation
+            still runs; for False/True modes invalid value inputs raise
+            immediately, while in "checkify" mode invalid value checks are
+            reported via the returned Error object rather than raising
+            ValueError automatically (shape mismatches may still raise during
+            tracing). This knob mainly affects what happens when the inputs
+            are tracers.
+              - False (default): value checks are skipped under tracing
+                (current behavior).
+              - True: NaN-poisoning. Sanitizes l/u so the inner solve cannot
+                blow up, runs the solve, then replaces x_star with NaN (and
+                marks SolveInfo.converged=False, residual_norm=NaN) when
+                inputs were invalid. Composes with jit, grad, and vmap with
+                near-zero overhead. Failure surfaces as NaN output, not an
+                exception.
+              - "checkify": uses jax.experimental.checkify to attach a
+                runtime error. The returned function's signature changes to
+                (l, u, x0, theta) -> (Error, x_star) (or (Error, (x_star,
+                SolveInfo)) when return_aux=True). Call err.throw() to
+                raise. Composes with jit and grad. For vmap, first form a
+                batched solver with jax.vmap(solver); avoid
+                checkify.checkify(jax.vmap(...)) — the kernel uses
+                lax.while_loop, which JAX rejects under
+                checkify-of-vmap-of-while. See docs/api.md.
 
     Returns:
         If return_aux is False (default):
@@ -104,6 +133,9 @@ def make_mcp_solver_diff(
         If return_aux is True:
             A function solve(l, u, x0, theta) -> (x_star, SolveInfo).
             Gradients flow through x_star only; SolveInfo is stopped.
+        If strict_validation == "checkify":
+            The function signature is wrapped to return (Error, ...) per
+            jax.experimental.checkify conventions.
         If F_fn takes only x, pass any array for theta (it will be ignored)
         but theta is still required for JAX tracing.
     """
@@ -127,6 +159,11 @@ def make_mcp_solver_diff(
     if adjoint_method not in ("gmres", "cg"):
         raise ValueError(
             f"adjoint_method must be 'gmres' or 'cg', got {adjoint_method!r}"
+        )
+    if strict_validation not in (False, True, "checkify"):
+        raise ValueError(
+            f"strict_validation must be False, True, or 'checkify', "
+            f"got {strict_validation!r}"
         )
 
     def _run_forward(l, u, x0, theta):
@@ -223,41 +260,65 @@ def make_mcp_solver_diff(
             converged=jax.lax.stop_gradient(converged),
         )
 
-    if return_aux:
+    # One custom_vjp definition — always returns (x_star, mu_used, num_steps).
+    # Aux packaging (return_aux) happens outside the custom_vjp boundary.
 
-        @custom_vjp
-        def solve(l, u, x0, theta):
-            x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
+    @custom_vjp
+    def _core_solve(l, u, x0, theta):
+        x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
+        return (
+            x_star,
+            jax.lax.stop_gradient(mu_used),
+            jax.lax.stop_gradient(num_steps),
+        )
+
+    def _core_fwd(l, u, x0, theta):
+        x_star, mu_final, num_steps = _run_forward(l, u, x0, theta)
+        primal_out = (
+            x_star,
+            jax.lax.stop_gradient(mu_final),
+            jax.lax.stop_gradient(num_steps),
+        )
+        residuals = (x_star, mu_final, l, u, theta)
+        return primal_out, residuals
+
+    def _core_bwd(res, cotangent):
+        x_star, mu_final, l, u, theta = res
+        g_x = cotangent[0]
+        return _compute_grads(x_star, mu_final, l, u, theta, g_x)
+
+    _core_solve.defvjp(_core_fwd, _core_bwd)
+
+    def solve(l, u, x0, theta):
+        x_star, mu_used, num_steps = _core_solve(l, u, x0, theta)
+        if return_aux:
             return x_star, _make_aux(x_star, mu_used, num_steps, l, u, theta)
+        return x_star
 
-        def _fwd(l, u, x0, theta):
-            x_star, mu_final, num_steps = _run_forward(l, u, x0, theta)
-            aux = _make_aux(x_star, mu_final, num_steps, l, u, theta)
-            return (x_star, aux), (x_star, mu_final, l, u, theta)
+    def _poison_aux(aux, invalid):
+        """Mark SolveInfo as failed when traced inputs were invalid."""
+        return SolveInfo(
+            mu_used=aux.mu_used,
+            num_steps=aux.num_steps,
+            residual_norm=jnp.where(invalid, jnp.nan, aux.residual_norm),
+            converged=jnp.where(invalid, jnp.bool_(False), aux.converged),
+        )
 
-        def _bwd(res, cotangent):
-            x_star, mu_final, l, u, theta = res
-            g_x, _g_aux = cotangent
-            return _compute_grads(x_star, mu_final, l, u, theta, g_x)
+    def _poisoned_solve(l, u, x0, theta):
+        """NaN-poisoning wrapper around the inner custom_vjp solve."""
+        invalid = traced_invalid_mask(l, u)
+        safe_l, safe_u = sanitize_bounds(l, u)
+        result = solve(safe_l, safe_u, x0, theta)
+        if return_aux:
+            x_star, aux = result
+            x_star = jnp.where(invalid, jnp.full_like(x_star, jnp.nan), x_star)
+            return x_star, _poison_aux(aux, invalid)
+        return jnp.where(invalid, jnp.full_like(result, jnp.nan), result)
 
-        solve.defvjp(_fwd, _bwd)
-
-    else:
-
-        @custom_vjp
-        def solve(l, u, x0, theta):
-            x_star, _mu_final, _num_steps = _run_forward(l, u, x0, theta)
-            return x_star
-
-        def _fwd(l, u, x0, theta):
-            x_star, mu_final, _num_steps = _run_forward(l, u, x0, theta)
-            return x_star, (x_star, mu_final, l, u, theta)
-
-        def _bwd(res, cotangent):
-            x_star, mu_final, l, u, theta = res
-            return _compute_grads(x_star, mu_final, l, u, theta, cotangent)
-
-        solve.defvjp(_fwd, _bwd)
+    def _checks(l, u):
+        checkify.check(~jnp.any(jnp.isnan(l)), "l contains NaN")
+        checkify.check(~jnp.any(jnp.isnan(u)), "u contains NaN")
+        checkify.check(jnp.all(l <= u), "l must be <= u element-wise")
 
     def solve_checked(l, u, x0, theta):
         l, u, x0, theta = (
@@ -267,6 +328,21 @@ def make_mcp_solver_diff(
             jnp.asarray(theta),
         )
         validate_bounds_and_x0(l, u, x0)
+        if strict_validation is True:
+            return _poisoned_solve(l, u, x0, theta)
         return solve(l, u, x0, theta)
+
+    if strict_validation == "checkify":
+
+        def _checkify_target(l, u, x0, theta):
+            l = jnp.asarray(l)
+            u = jnp.asarray(u)
+            x0 = jnp.asarray(x0)
+            theta = jnp.asarray(theta)
+            validate_bounds_and_x0(l, u, x0)
+            _checks(l, u)
+            return solve(l, u, x0, theta)
+
+        return checkify.checkify(_checkify_target)
 
     return solve_checked

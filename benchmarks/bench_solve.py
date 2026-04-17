@@ -1,4 +1,4 @@
-"""Benchmark repeated solve_mcp and differentiable solve calls."""
+"""Benchmark repeated solve_mcp, forward-only factory, and differentiable solves."""
 
 import platform
 import time
@@ -8,7 +8,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
-from smooth_mcp import make_mcp_solver_diff, solve_mcp
+from smooth_mcp import make_mcp_solver, make_mcp_solver_diff, solve_mcp
 
 
 def F_lcp(x):
@@ -46,13 +46,22 @@ def bench(label, fn, n=N_REPEATS):
     return avg
 
 
-print("=== solve_mcp (non-differentiable) ===")
-bench("solve_mcp(F_lcp)", lambda: solve_mcp(F_lcp, l, u, x0))
+print("=== solve_mcp (non-differentiable, eager) ===")
+solve_mcp_avg = bench("solve_mcp(F_lcp)", lambda: solve_mcp(F_lcp, l, u, x0))
 
-print("\n=== make_mcp_solver_diff (factory + forward) ===")
+print("\n=== make_mcp_solver (forward-only factory) ===")
+fwd_solver = make_mcp_solver(F_param)
+bench("factory creation", lambda: make_mcp_solver(F_param))
+fwd_eager_avg = bench("eager solve", lambda: fwd_solver(l, u, x0, theta))
+fwd_jit = jax.jit(fwd_solver)
+fwd_jit_avg = bench("jit solve (warm)", lambda: fwd_jit(l, u, x0, theta))
+
+print("\n=== make_mcp_solver_diff (differentiable factory, forward path) ===")
 solver = make_mcp_solver_diff(F_param)
 bench("factory creation", lambda: make_mcp_solver_diff(F_param))
-bench("forward solve", lambda: solver(l, u, x0, theta))
+diff_eager_avg = bench("eager forward solve", lambda: solver(l, u, x0, theta))
+diff_jit = jax.jit(solver)
+diff_jit_avg = bench("jit forward solve (warm)", lambda: diff_jit(l, u, x0, theta))
 
 print("\n=== jax.grad through differentiable solve ===")
 def loss(th):
@@ -88,7 +97,19 @@ jit_avg = bench("jit grad (cached, varying theta)", _bench_varying)
 print(f"\n=== Summary ({time.strftime('%Y-%m-%d')}) ===")
 print(f"  Platform: {platform.platform()}")
 print(f"  JAX: {jax.__version__}, Devices: {jax.devices()}")
+print("\n  Forward solves (ms/call):")
+print(f"    solve_mcp (eager):               {solve_mcp_avg*1000:.1f}")
+print(f"    make_mcp_solver (eager):         {fwd_eager_avg*1000:.1f}")
+print(f"    make_mcp_solver (jit):           {fwd_jit_avg*1000:.1f}")
+print(f"    make_mcp_solver_diff (eager):    {diff_eager_avg*1000:.1f}")
+print(f"    make_mcp_solver_diff (jit):      {diff_jit_avg*1000:.1f}")
+if fwd_jit_avg > 0:
+    fwd_speedup = solve_mcp_avg / fwd_jit_avg
+    print(f"\n  make_mcp_solver(jit) vs solve_mcp(eager): {fwd_speedup:.1f}x")
 if jit_avg > 0:
     speedup = eager_avg / jit_avg
-    print(f"  Measured speedup (eager grad vs jit grad): {speedup:.0f}x")
-print("  Use make_mcp_solver_diff + jax.jit for best performance in training loops.")
+    print(f"  jit grad vs eager grad:                    {speedup:.0f}x")
+print("\n  Guidance:")
+print("    - One-off or debugging:       solve_mcp")
+print("    - Repeated forward solves:    make_mcp_solver wrapped in jax.jit")
+print("    - Gradient-based training:    make_mcp_solver_diff wrapped in jax.jit")
