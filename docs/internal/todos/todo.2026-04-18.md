@@ -309,7 +309,7 @@ Coverage (27 tests across 4 classes):
 3 tests covering:
 - `vmap(solver, in_axes=(None, None, None, 0))` over a batch of
   thetas: shape, finiteness, and per-row parity with unbatched calls.
-- `jax.jit(jax.jvmap(solver))` composition: shape, finiteness,
+- `jax.jit(jax.vmap(solver))` composition: shape, finiteness,
   compiled-graph reuse on a second call.
 - `return_aux=True` under `vmap`: `SolveInfo` fields all have the
   expected batch dimension and every row reports `converged=True`.
