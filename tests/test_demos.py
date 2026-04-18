@@ -12,23 +12,39 @@ Slow demos are tagged with ``@pytest.mark.slow`` and skipped by
 default. Run them explicitly with ``pytest -m slow``.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-DEMOS_DIR = Path(__file__).resolve().parent.parent / "demos"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEMOS_DIR = REPO_ROOT / "demos"
 
 
 def _run_demo(name: str) -> None:
     demo_path = DEMOS_DIR / name
     assert demo_path.exists(), f"Demo not found: {demo_path}"
+
+    # Running ``python demos/foo.py`` sets ``sys.path[0]`` to the
+    # ``demos/`` directory. If the package is not installed
+    # (editable or otherwise) into the interpreter, ``import smooth_mcp``
+    # in the demo will fail. Prepend the repo root to ``PYTHONPATH`` so
+    # the subprocess can always find the in-tree package.
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH")
+    repo_root = str(REPO_ROOT)
+    env["PYTHONPATH"] = (
+        os.pathsep.join([repo_root, existing]) if existing else repo_root
+    )
+
     result = subprocess.run(
         [sys.executable, str(demo_path)],
         capture_output=True,
         text=True,
         timeout=900,
+        env=env,
     )
     if result.returncode != 0:
         msg = (
