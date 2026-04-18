@@ -17,7 +17,7 @@
 
 ## Invalid bounds not rejected under `jax.jit` / `jax.grad` / `jax.vmap`
 
-As of 2026-04-18, the factory default is now `strict_validation=True`, so invalid traced inputs produce `NaN` output and `SolveInfo.converged=False` instead of silently flowing through. If you still see a finite result from invalid inputs, you are on the explicit opt-out path (`strict_validation=False`).
+As of 2026-04-18, the factory default is now `strict_validation=True`, so invalid traced inputs produce `NaN` output and `SolveInfo.converged=False` instead of silently flowing through. If you still see a finite result from invalid inputs, that can mean either you explicitly opted out with `strict_validation=False`, or you built the solver with `strict_validation="checkify"` and did not inspect the returned `Error` object (for example by calling `err.throw()` or `err.get()`).
 
 Options (see [Input validation](api.md#input-validation) in `docs/api.md`):
 
