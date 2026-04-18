@@ -1,12 +1,28 @@
 # Installation
 
+## Supported versions
+
+| Component | Supported |
+|---|---|
+| Python | 3.11, 3.12, 3.13 (CI matrix) |
+| JAX / jaxlib | `>=0.4.38` (pinned lower bound) |
+
+Python 3.10 may work but is not exercised by CI. Older Python versions are
+not supported because the test suite uses patterns (structural pattern
+matching, improved type hints) that require 3.11+.
+
+JAX `>=0.4.38` is required for stable composition of `jax.experimental.checkify`
+with `jit`/`grad`/`vmap` and for the current sparse linear solver API
+(`jax.scipy.sparse.linalg.gmres`, `cg`). Newer JAX releases are expected to
+work; CI does not currently test against a JAX matrix.
+
 ## Standard install
 
 ```bash
 pip install .
 ```
 
-This installs the `smooth_mcp` package along with its dependencies (`jax`, `jaxlib`).
+This installs the `smooth_mcp` package along with its dependencies (`jax>=0.4.38`, `jaxlib>=0.4.38`).
 
 ## Development install
 

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from smooth_mcp import make_mcp_solver_diff, solve_mcp
+from smooth_mcp import make_mcp_solver, make_mcp_solver_diff, solve_mcp
 
 
 class TestSingularJacobian:
@@ -394,6 +394,13 @@ class TestInputValidation:
         with pytest.raises(ValueError, match="Lower bounds must not exceed"):
             solve_mcp(F, jnp.array([5.0]), jnp.array([3.0]), jnp.array([4.0]))
 
+    def test_nan_x0(self):
+        def F(x):
+            return x
+
+        with pytest.raises(ValueError, match="x0 must not contain NaN"):
+            solve_mcp(F, jnp.array([0.0]), jnp.array([1.0]), jnp.array([jnp.nan]))
+
     def test_negative_mu_init(self):
         def F(x):
             return x
@@ -546,6 +553,13 @@ class TestDiffSolverRuntimeValidation:
                 jnp.array([0.0]), jnp.array([jnp.nan]), jnp.array([0.5]), jnp.zeros(0)
             )
 
+    def test_nan_x0(self):
+        solver = self._make_solver()
+        with pytest.raises(ValueError, match="x0 must not contain NaN"):
+            solver(
+                jnp.array([0.0]), jnp.array([1.0]), jnp.array([jnp.nan]), jnp.zeros(0)
+            )
+
 
 class TestDiffSolverValidation:
     """Validate that make_mcp_solver_diff rejects invalid parameters at construction."""
@@ -581,6 +595,184 @@ class TestDiffSolverValidation:
     def test_invalid_adjoint_method(self):
         with pytest.raises(ValueError, match="adjoint_method must be"):
             make_mcp_solver_diff(lambda x: x, adjoint_method="bicgstab")
+
+
+class TestExtendedOptionValidation:
+    """Tests for the public option validators introduced in todo.2026-04-18 #2.
+
+    Verifies that every public solver knob is rejected at the API
+    boundary with a clear ``ValueError`` instead of drifting into JAX
+    internals as an opaque failure.
+    """
+
+    _L = jnp.array([0.0])
+    _U = jnp.array([1.0])
+    _X0 = jnp.array([0.5])
+
+    # -- solve_mcp (call-time) --------------------------------------------
+
+    def test_solve_mcp_armijo_c_out_of_range_zero(self):
+        with pytest.raises(ValueError, match="armijo_c must be in"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, armijo_c=0.0)
+
+    def test_solve_mcp_armijo_c_out_of_range_one(self):
+        with pytest.raises(ValueError, match="armijo_c must be in"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, armijo_c=1.0)
+
+    def test_solve_mcp_armijo_c_negative(self):
+        with pytest.raises(ValueError, match="armijo_c must be in"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, armijo_c=-0.1)
+
+    def test_solve_mcp_backtrack_rho_out_of_range(self):
+        with pytest.raises(ValueError, match="backtrack_rho must be in"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, backtrack_rho=1.5)
+
+    def test_solve_mcp_max_ls_steps_negative(self):
+        with pytest.raises(ValueError, match="max_ls_steps must be >= 0"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, max_ls_steps=-3)
+
+    def test_solve_mcp_krylov_tol_negative(self):
+        with pytest.raises(ValueError, match="krylov_tol must be positive"):
+            solve_mcp(
+                lambda x: x,
+                self._L,
+                self._U,
+                self._X0,
+                linear_solver="gmres",
+                krylov_tol=-1.0,
+            )
+
+    def test_solve_mcp_krylov_tol_zero(self):
+        with pytest.raises(ValueError, match="krylov_tol must be positive"):
+            solve_mcp(
+                lambda x: x,
+                self._L,
+                self._U,
+                self._X0,
+                linear_solver="gmres",
+                krylov_tol=0.0,
+            )
+
+    def test_solve_mcp_krylov_maxiter_zero(self):
+        with pytest.raises(ValueError, match="krylov_maxiter must be >= 1"):
+            solve_mcp(
+                lambda x: x,
+                self._L,
+                self._U,
+                self._X0,
+                linear_solver="gmres",
+                krylov_maxiter=0,
+            )
+
+    def test_solve_mcp_krylov_restart_zero(self):
+        with pytest.raises(ValueError, match="krylov_restart must be >= 1"):
+            solve_mcp(
+                lambda x: x,
+                self._L,
+                self._U,
+                self._X0,
+                linear_solver="gmres",
+                krylov_restart=0,
+            )
+
+    def test_solve_mcp_invalid_linear_solver(self):
+        with pytest.raises(ValueError, match="linear_solver must be"):
+            solve_mcp(lambda x: x, self._L, self._U, self._X0, linear_solver="bicgstab")
+
+    # -- make_mcp_solver (construction-time) ------------------------------
+
+    def test_forward_factory_armijo_c_out_of_range(self):
+        with pytest.raises(ValueError, match="armijo_c must be in"):
+            make_mcp_solver(lambda x: x, armijo_c=0.0)
+
+    def test_forward_factory_backtrack_rho_out_of_range(self):
+        with pytest.raises(ValueError, match="backtrack_rho must be in"):
+            make_mcp_solver(lambda x: x, backtrack_rho=1.1)
+
+    def test_forward_factory_max_ls_steps_negative(self):
+        with pytest.raises(ValueError, match="max_ls_steps must be >= 0"):
+            make_mcp_solver(lambda x: x, max_ls_steps=-1)
+
+    def test_forward_factory_krylov_tol_zero(self):
+        with pytest.raises(ValueError, match="krylov_tol must be positive"):
+            make_mcp_solver(lambda x: x, krylov_tol=0.0)
+
+    def test_forward_factory_krylov_maxiter_zero(self):
+        with pytest.raises(ValueError, match="krylov_maxiter must be >= 1"):
+            make_mcp_solver(lambda x: x, krylov_maxiter=0)
+
+    def test_forward_factory_krylov_restart_zero(self):
+        with pytest.raises(ValueError, match="krylov_restart must be >= 1"):
+            make_mcp_solver(lambda x: x, krylov_restart=0)
+
+    def test_forward_factory_invalid_linear_solver(self):
+        with pytest.raises(ValueError, match="linear_solver must be"):
+            make_mcp_solver(lambda x: x, linear_solver="bicgstab")
+
+    # -- make_mcp_solver_diff (construction-time) -------------------------
+
+    def test_diff_factory_armijo_c_out_of_range(self):
+        with pytest.raises(ValueError, match="armijo_c must be in"):
+            make_mcp_solver_diff(lambda x: x, armijo_c=1.0)
+
+    def test_diff_factory_backtrack_rho_out_of_range(self):
+        with pytest.raises(ValueError, match="backtrack_rho must be in"):
+            make_mcp_solver_diff(lambda x: x, backtrack_rho=0.0)
+
+    def test_diff_factory_max_ls_steps_negative(self):
+        with pytest.raises(ValueError, match="max_ls_steps must be >= 0"):
+            make_mcp_solver_diff(lambda x: x, max_ls_steps=-5)
+
+    def test_diff_factory_krylov_tol_zero(self):
+        with pytest.raises(ValueError, match="krylov_tol must be positive"):
+            make_mcp_solver_diff(lambda x: x, krylov_tol=0.0)
+
+    def test_diff_factory_krylov_maxiter_zero(self):
+        with pytest.raises(ValueError, match="krylov_maxiter must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, krylov_maxiter=0)
+
+    def test_diff_factory_krylov_restart_zero(self):
+        with pytest.raises(ValueError, match="krylov_restart must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, krylov_restart=0)
+
+    def test_diff_factory_invalid_linear_solver(self):
+        with pytest.raises(ValueError, match="linear_solver must be"):
+            make_mcp_solver_diff(lambda x: x, linear_solver="bicgstab")
+
+    # -- Adjoint options (diff factory only) ------------------------------
+
+    def test_diff_factory_gmres_tol_zero(self):
+        with pytest.raises(ValueError, match="gmres_tol must be positive"):
+            make_mcp_solver_diff(lambda x: x, gmres_tol=0.0)
+
+    def test_diff_factory_gmres_tol_negative(self):
+        with pytest.raises(ValueError, match="gmres_tol must be positive"):
+            make_mcp_solver_diff(lambda x: x, gmres_tol=-1e-6)
+
+    def test_diff_factory_gmres_maxiter_zero(self):
+        with pytest.raises(ValueError, match="gmres_maxiter must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, gmres_maxiter=0)
+
+    def test_diff_factory_gmres_restart_zero(self):
+        with pytest.raises(ValueError, match="gmres_restart must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, gmres_restart=0)
+
+    def test_diff_factory_cg_tol_zero(self):
+        with pytest.raises(ValueError, match="cg_tol must be positive"):
+            make_mcp_solver_diff(lambda x: x, cg_tol=0.0)
+
+    def test_diff_factory_cg_tol_negative(self):
+        with pytest.raises(ValueError, match="cg_tol must be positive"):
+            make_mcp_solver_diff(lambda x: x, cg_tol=-1e-6)
+
+    def test_diff_factory_cg_maxiter_zero(self):
+        with pytest.raises(ValueError, match="cg_maxiter must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, cg_maxiter=0)
+
+    def test_adjoint_validated_even_when_using_gmres(self):
+        """Bad cg_* must be rejected even when adjoint_method='gmres'."""
+        with pytest.raises(ValueError, match="cg_maxiter must be >= 1"):
+            make_mcp_solver_diff(lambda x: x, adjoint_method="gmres", cg_maxiter=0)
 
 
 class TestNormalizeF:

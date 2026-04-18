@@ -3,8 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from smooth_mcp import make_mcp_solver_diff
-from smooth_mcp.diff import SolveInfo
+from smooth_mcp import SolveInfo, make_mcp_solver_diff
 
 # -- Problem definitions ---------------------------------------------------
 

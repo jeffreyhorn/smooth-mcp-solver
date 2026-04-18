@@ -203,17 +203,19 @@ All three entry points accept `F_fn` in two forms:
 
 ## Input validation
 
+> **Migration note (2026-04-18):** the factory default for `strict_validation` changed from `False` to `True`. Invalid traced inputs now produce `NaN` output and `SolveInfo.converged=False` instead of silent finite results. If you relied on the old default and your bounds are always valid, pass `strict_validation=False` explicitly to restore the previous fast path.
+
 All three entry points enforce three checks on `l`, `u`, and `x0`:
 - Shape checks: all three arrays must have the same shape.
-- NaN checks: `l` and `u` must not contain NaN.
+- NaN checks: `l`, `u`, and `x0` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
 Shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
 
 - **Eager execution** — full value checks run. Invalid input raises `ValueError`.
-- **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — by default, value checks are **silently skipped** because concrete values are not available during tracing. Invalid bounds can flow through a jitted training step without a hard failure.
+- **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — the factory default is now **safe**: `make_mcp_solver` and `make_mcp_solver_diff` both construct with `strict_validation=True` (NaN-poisoning), so invalid traced bounds or `x0` produce `NaN` output (and `SolveInfo.converged=False` with `return_aux=True`) instead of silently flowing through. Pass `strict_validation=False` to opt out of the check — see mode 4 below.
 
-Three opt-in mechanisms cover the traced case. Pick the one that matches your pipeline:
+Three mechanisms cover the traced case. The factories use mode 2 by default; pick another if it matches your pipeline better:
 
 ### 1. `preflight_validate(l, u, x0)` — cheapest, for static bounds
 
@@ -231,19 +233,19 @@ for step in range(n_steps):
 
 Use this whenever `l`, `u`, and `x0` are known up front and stay constant.
 
-### 2. `strict_validation=True` — NaN-poisoning, composes with `vmap`
+### 2. `strict_validation=True` — NaN-poisoning (factory default)
 
-When bounds are themselves traced (learned, batched, or swept with `vmap`), opt into NaN-poisoning. The factory sanitizes `l`/`u` so the inner solve is well-defined, then replaces the output with NaN when the original input was invalid. With `return_aux=True`, `SolveInfo.converged` is forced to `False` and `residual_norm` to `NaN` on bad rows.
+When bounds or `x0` are themselves traced (learned, batched, or swept with `vmap`), the factory default catches invalid inputs via NaN-poisoning. The factory sanitizes `l`, `u`, and `x0` so the inner solve is well-defined, then replaces the output with NaN when any of those inputs was invalid (NaN in `l`, `u`, or `x0`, or `l > u`). With `return_aux=True`, `SolveInfo.converged` is forced to `False` and `residual_norm` to `NaN` on bad rows.
 
-Both `make_mcp_solver` and `make_mcp_solver_diff` accept `strict_validation`:
+Both `make_mcp_solver` and `make_mcp_solver_diff` construct with `strict_validation=True` by default, so this mode is on unless you opt out:
 
 ```python
 # Forward-only:
-solver = make_mcp_solver(F, strict_validation=True, return_aux=True)
+solver = make_mcp_solver(F, return_aux=True)  # strict_validation=True by default
 x, info = jax.jit(solver)(l, u, x0, theta)
 
 # Differentiable:
-solver = make_mcp_solver_diff(F, strict_validation=True, return_aux=True)
+solver = make_mcp_solver_diff(F, return_aux=True)  # strict_validation=True by default
 x, info = jax.jit(solver)(l, u, x0, theta)
 # info.converged == False for any invalid row under vmap
 ```
@@ -276,13 +278,28 @@ errs.throw()  # reports "at mapped index N: ..." per bad row
 
 Per-call overhead on a small 1D problem is about 16% under warm `jit`; negligible for real workloads.
 
+### 4. `strict_validation=False` — explicit opt-out of traced validation
+
+For the rare case where traced-validation overhead matters and you can guarantee every call sees valid inputs (for example, right after `preflight_validate` on static bounds inside a tight inner loop), pass `strict_validation=False` to opt out:
+
+```python
+# You've guaranteed l, u, x0 are valid — skip the traced check.
+preflight_validate(l, u, x0)
+solver = jax.jit(make_mcp_solver(F, strict_validation=False))
+for theta in theta_sweep:
+    x_star = solver(l, u, x0, theta)  # no per-call traced validation
+```
+
+When `strict_validation=False`, invalid traced inputs produce silent finite output (or NaN propagation, depending on the problem) — the factory does not check them. This used to be the default; flipping it to `True` makes the safe path the default and the fast path explicit.
+
 ### Which to use
 
 | Situation | Mechanism |
 |---|---|
+| Factory default (safe) | `strict_validation=True` (no argument needed) |
 | Bounds static across a training loop | `preflight_validate` before the loop |
-| Bounds traced, batched, or swept; want composability | `strict_validation=True` |
 | Want raised exceptions on invalid input | `strict_validation="checkify"` |
+| Tight inner loop with guaranteed-valid inputs | `strict_validation=False` (explicit opt-out) |
 | Debugging / one-off solves | `solve_mcp` (always eager, always checks) |
 
 ## Comparing the three entry points

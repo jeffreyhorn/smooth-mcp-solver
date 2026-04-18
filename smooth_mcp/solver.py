@@ -1,6 +1,6 @@
 """MCP solver: Newton-Armijo continuation with mu-smoothing."""
 
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, Optional
 
 import jax.numpy as jnp
 
@@ -9,24 +9,10 @@ from smooth_mcp._kernel import (
     make_newton_solver,
     normalize_F,
     validate_bounds_and_x0,
+    validate_solver_options,
 )
+from smooth_mcp._types import MCPResult
 from smooth_mcp.smoothing import smoothed_residual
-
-
-class MCPResult(NamedTuple):
-    """Result from solve_mcp.
-
-    Attributes:
-        x: Solution array.
-        residual_norm: Max absolute value of the smoothed residual at the solution.
-        num_steps: Total number of outer solver steps (mu-reduction and terminal-mu iterations).
-        converged: True if the final residual norm is below newton_tol.
-    """
-
-    x: jnp.ndarray
-    residual_norm: float
-    num_steps: int
-    converged: bool
 
 
 def solve_mcp(
@@ -93,22 +79,21 @@ def solve_mcp(
         theta = jnp.asarray(theta)
 
     validate_bounds_and_x0(l, u, x0)
-    if mu_init <= 0:
-        raise ValueError(f"mu_init must be positive, got {mu_init}")
-    if mu_min <= 0:
-        raise ValueError(f"mu_min must be positive, got {mu_min}")
-    if mu_min > mu_init:
-        raise ValueError(
-            f"mu_min must be <= mu_init, got mu_min={mu_min}, mu_init={mu_init}"
-        )
-    if mu_decay <= 0 or mu_decay >= 1:
-        raise ValueError(f"mu_decay must be in (0, 1), got {mu_decay}")
-    if max_mu_steps < 1:
-        raise ValueError(f"max_mu_steps must be >= 1, got {max_mu_steps}")
-    if newton_tol < 0:
-        raise ValueError(f"newton_tol must be non-negative, got {newton_tol}")
-    if regularize < 0:
-        raise ValueError(f"regularize must be non-negative, got {regularize}")
+    validate_solver_options(
+        mu_init=mu_init,
+        mu_min=mu_min,
+        mu_decay=mu_decay,
+        max_mu_steps=max_mu_steps,
+        newton_tol=newton_tol,
+        regularize=regularize,
+        armijo_c=armijo_c,
+        backtrack_rho=backtrack_rho,
+        max_ls_steps=max_ls_steps,
+        linear_solver=linear_solver,
+        krylov_tol=krylov_tol,
+        krylov_maxiter=krylov_maxiter,
+        krylov_restart=krylov_restart,
+    )
 
     newton_solve = make_newton_solver(
         F_fn,
