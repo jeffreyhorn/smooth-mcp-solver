@@ -3,15 +3,9 @@
 import jax
 import jax.numpy as jnp
 import pytest
+from packaging.version import Version
 
 from smooth_mcp import make_mcp_solver_diff, preflight_validate
-
-
-def _jax_version_tuple() -> tuple[int, ...]:
-    """Parse ``jax.__version__`` into a (major, minor, patch) tuple."""
-    parts = jax.__version__.split(".")
-    return tuple(int(p) for p in parts[:3] if p.isdigit())
-
 
 # Upstream JAX regression: `vmap(checkify(f_with_lax.while_loop))` — the
 # composition JAX's own error message calls "the correct ordering" — was
@@ -24,7 +18,11 @@ def _jax_version_tuple() -> tuple[int, ...]:
 # NaN-poisoning (``strict_validation=True``) works on every JAX version
 # we test and is the recommended traced-validation path under batching
 # — see docs/api.md §Input validation.
-_JAX_VMAP_CHECKIFY_BROKEN = _jax_version_tuple() >= (0, 7)
+#
+# ``packaging.version.Version`` is used because ``jax.__version__`` may
+# include non-numeric suffixes (e.g., ``"0.7.0rc1"``, ``"0.10.0.dev"``)
+# that a naïve split-on-dot parse would misread.
+_JAX_VMAP_CHECKIFY_BROKEN = Version(jax.__version__) >= Version("0.7")
 
 
 def _F(x, theta):
