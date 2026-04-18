@@ -10,16 +10,12 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [{name = "Jeffrey Horn"}]
-# JAX range matches what CI exercises. Lower bound is needed for
+# JAX lower bound matches the version exercised by CI. Required for
 # checkify composition with jit/grad/vmap and for the current sparse
-# linear solver API (jax.scipy.sparse.linalg.gmres, cg). Upper bound
-# pins to the 0.4.x series — the JAX 0.10 line regressed
-# vmap(checkify(...)) on lax.while_loop (foreach arity mismatch),
-# which this library's strict-validation path depends on. Relax the
-# upper bound only after re-testing against the newer series.
+# linear solver API (jax.scipy.sparse.linalg.gmres, cg).
 dependencies = [
-    "jax>=0.4.38,<0.5",
-    "jaxlib>=0.4.38,<0.5",
+    "jax>=0.4.38",
+    "jaxlib>=0.4.38",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

@@ -262,19 +262,19 @@ err, x = solver(l, u, x0, theta)
 err.throw()  # raises JaxRuntimeError on invalid input
 ```
 
-Composes with `jit` and `grad`. For `vmap`, the ordering matters:
+Composes with `jit` and `grad`.
+
+**Known upstream JAX bug with `vmap` (as of JAX 0.10):** the composition `vmap(solver)` used to work on JAX ≤ 0.6 and reported per-row errors (`"at mapped index N: ..."`), but regressed starting in JAX 0.7 and is still broken in 0.10 — `jax.vmap(checkify_solver)(...)` raises `ValueError: foreach() argument 2 is longer than argument 1` deep inside JAX's jaxpr evaluator. The continuation kernel uses `lax.while_loop`, which is the trigger. The wrong ordering (`checkify(vmap(...))`) has always raised, and still does:
 
 ```python
-# CORRECT — vmap(solver)
-batched = jax.vmap(solver)
-errs, xs = batched(ls, us, x0s, thetas)
-errs.throw()  # reports "at mapped index N: ..." per bad row
-
-# WRONG — checkify(vmap(...)) fails at trace time:
+# WRONG (always) — checkify(vmap(...)) rejected at trace time:
 #   ValueError: Checkify does not support batched while-loops
-# The continuation kernel uses lax.while_loop, which JAX rejects under
-# checkify-of-vmap-of-while. Put checkify on the inside.
+
+# INTENDED — vmap(solver):
+#   Works on JAX <= 0.6; broken on JAX 0.7+ (upstream regression).
 ```
+
+**Recommendation for batched validation:** use `strict_validation=True` (NaN-poisoning) with `vmap`. NaN-poisoning composes cleanly with `vmap`/`jit`/`grad` on every JAX version we test and reports per-row failure via `SolveInfo.converged=False` and `NaN` in the output row. See mode 2 above. Reserve `strict_validation="checkify"` for non-batched `jit`/`grad` workflows.
 
 Per-call overhead on a small 1D problem is about 16% under warm `jit`; negligible for real workloads.
 
