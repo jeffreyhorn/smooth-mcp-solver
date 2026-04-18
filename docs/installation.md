@@ -5,16 +5,19 @@
 | Component | Supported |
 |---|---|
 | Python | 3.11, 3.12, 3.13 (CI matrix) |
-| JAX / jaxlib | `>=0.4.38` (pinned lower bound) |
+| JAX / jaxlib | `>=0.4.38, <0.5` (0.4.x series) |
 
 Python 3.10 may work but is not exercised by CI. We officially support
 Python 3.11+ because that is the version range covered by the current CI
 matrix; older Python versions are not supported.
 
-JAX `>=0.4.38` is required for stable composition of `jax.experimental.checkify`
-with `jit`/`grad`/`vmap` and for the current sparse linear solver API
-(`jax.scipy.sparse.linalg.gmres`, `cg`). Newer JAX releases are expected to
-work; CI does not currently test against a JAX matrix.
+The JAX range is pinned to the 0.4.x series. The lower bound is needed
+for stable composition of `jax.experimental.checkify` with
+`jit`/`grad`/`vmap` and for the current sparse linear solver API
+(`jax.scipy.sparse.linalg.gmres`, `cg`). The upper bound excludes the
+0.5+ and 0.10+ series, which regressed the `vmap(checkify(...))`
+composition that this library's strict-validation path uses. The range
+can be widened after re-testing against newer JAX.
 
 ## Standard install
 
