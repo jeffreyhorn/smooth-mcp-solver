@@ -215,7 +215,7 @@ Shape checks run unconditionally because shapes are available even under tracing
 - **Eager execution** — full value checks run. Invalid input raises `ValueError`.
 - **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — the factory default is now **safe**: `make_mcp_solver` and `make_mcp_solver_diff` both construct with `strict_validation=True` (NaN-poisoning), so invalid traced bounds or `x0` produce `NaN` output (and `SolveInfo.converged=False` with `return_aux=True`) instead of silently flowing through. Pass `strict_validation=False` to opt out of the check — see mode 4 below.
 
-Three mechanisms cover the traced case. The factories use mode 2 by default; pick another if it matches your pipeline better:
+Four mechanisms cover the traced case. The factories use mode 2 by default; pick another if it matches your pipeline better:
 
 ### 1. `preflight_validate(l, u, x0)` — cheapest, for static bounds
 

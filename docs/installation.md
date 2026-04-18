@@ -7,9 +7,9 @@
 | Python | 3.11, 3.12, 3.13 (CI matrix) |
 | JAX / jaxlib | `>=0.4.38` (pinned lower bound) |
 
-Python 3.10 may work but is not exercised by CI. Older Python versions are
-not supported because the test suite uses patterns (structural pattern
-matching, improved type hints) that require 3.11+.
+Python 3.10 may work but is not exercised by CI. We officially support
+Python 3.11+ because that is the version range covered by the current CI
+matrix; older Python versions are not supported.
 
 JAX `>=0.4.38` is required for stable composition of `jax.experimental.checkify`
 with `jit`/`grad`/`vmap` and for the current sparse linear solver API
