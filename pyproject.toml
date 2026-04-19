@@ -8,9 +8,24 @@ version = "0.1.0"
 description = "JAX solver for Mixed Complementarity Problems with implicit differentiation"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{name = "Jeffrey Horn"}]
-dependencies = ["jax", "jaxlib"]
+# JAX lower bound matches the version exercised by CI. Required for
+# checkify composition with jit/grad/vmap and for the current sparse
+# linear solver API (jax.scipy.sparse.linalg.gmres, cg).
+dependencies = [
+    "jax>=0.4.38",
+    "jaxlib>=0.4.38",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "ruff", "mypy", "black"]
@@ -18,6 +33,15 @@ dev = ["pytest", "pytest-cov", "ruff", "mypy", "black"]
 [tool.ruff.lint]
 # E741: 'l' is standard notation for lower bounds in MCP literature
 ignore = ["E741", "E402"]
+
+[tool.pytest.ini_options]
+# Skip slow-tagged tests by default. Run them explicitly with:
+#   pytest -m slow           (only slow tests)
+#   pytest -m "slow or not slow"  (everything)
+addopts = "-m 'not slow'"
+markers = [
+    "slow: marks tests as slow (deselected by default; run with -m slow)",
+]
 
 [tool.setuptools.packages.find]
 include = ["smooth_mcp*"]

@@ -13,11 +13,12 @@ from smooth_mcp._kernel import (
     make_continuation_solver,
     make_newton_solver,
     normalize_F,
-    sanitize_bounds,
+    sanitize_inputs,
     traced_invalid_mask,
     validate_bounds_and_x0,
+    validate_solver_options,
 )
-from smooth_mcp.diff import SolveInfo
+from smooth_mcp._types import SolveInfo
 from smooth_mcp.smoothing import smoothed_residual
 
 
@@ -37,7 +38,7 @@ def make_mcp_solver(
     krylov_restart: int = 30,
     regularize: float = 1e-12,
     return_aux: bool = False,
-    strict_validation: Union[bool, str] = False,
+    strict_validation: Union[bool, str] = True,
 ):
     """Factory returning a reusable forward-only MCP solver.
 
@@ -68,19 +69,24 @@ def make_mcp_solver(
         regularize: Tikhonov regularization for the Newton Jacobian.
         return_aux: If True, the returned function returns (x_star, SolveInfo)
             instead of just x_star.
-        strict_validation: Controls validation of bounds inside traced code
-            (jit, vmap). For ordinary eager calls, invalid-value checks still
-            run before the solve in the default and NaN-poisoning modes and
-            raise on invalid inputs. In "checkify" mode, invalid value checks
-            are reported via the returned Error rather than an eager
-            ValueError, although tracing-time issues such as shape mismatches
-            can still raise during tracing.
-              - False (default): value checks are skipped under tracing.
-              - True: NaN-poisoning. Sanitizes l/u so the inner solve cannot
-                blow up, runs the solve, then replaces x_star with NaN (and
-                SolveInfo.converged=False, residual_norm=NaN) when inputs
-                were invalid. Composes with jit and vmap at near-zero
-                overhead. Failure surfaces as NaN, not an exception.
+        strict_validation: Controls validation of bounds and x0 inside
+            traced code (jit, vmap). For ordinary eager calls, invalid-value
+            checks run before the solve in the default and NaN-poisoning
+            modes and raise on invalid inputs. In "checkify" mode, invalid
+            value checks are reported via the returned Error rather than an
+            eager ValueError, although tracing-time issues such as shape
+            mismatches can still raise during tracing.
+              - True (default): NaN-poisoning. Sanitizes l/u/x0 so the
+                inner solve cannot blow up, runs the solve, then replaces
+                x_star with NaN (and SolveInfo.converged=False,
+                residual_norm=NaN) when inputs were invalid. Composes with
+                jit and vmap at near-zero overhead. Failure surfaces as
+                NaN, not an exception. This is the safe-by-default mode.
+              - False: value checks are skipped under tracing. Invalid
+                bounds or x0 flow through silently and may produce
+                finite-looking but meaningless output. Use only when you
+                know every call sees valid inputs (e.g., inside a tight
+                inner loop after calling ``preflight_validate``).
               - "checkify": uses jax.experimental.checkify to attach a
                 runtime error. Signature changes to
                 (l, u, x0, theta) -> (Error, x_star) (or
@@ -98,22 +104,21 @@ def make_mcp_solver(
         theta is still required for JAX tracing consistency.
     """
     F_fn_normalized = normalize_F(F_fn)
-    if mu_init <= 0:
-        raise ValueError(f"mu_init must be positive, got {mu_init}")
-    if mu_min <= 0:
-        raise ValueError(f"mu_min must be positive, got {mu_min}")
-    if mu_min > mu_init:
-        raise ValueError(
-            f"mu_min must be <= mu_init, got mu_min={mu_min}, mu_init={mu_init}"
-        )
-    if mu_decay <= 0 or mu_decay >= 1:
-        raise ValueError(f"mu_decay must be in (0, 1), got {mu_decay}")
-    if max_mu_steps < 1:
-        raise ValueError(f"max_mu_steps must be >= 1, got {max_mu_steps}")
-    if newton_tol < 0:
-        raise ValueError(f"newton_tol must be non-negative, got {newton_tol}")
-    if regularize < 0:
-        raise ValueError(f"regularize must be non-negative, got {regularize}")
+    validate_solver_options(
+        mu_init=mu_init,
+        mu_min=mu_min,
+        mu_decay=mu_decay,
+        max_mu_steps=max_mu_steps,
+        newton_tol=newton_tol,
+        regularize=regularize,
+        armijo_c=armijo_c,
+        backtrack_rho=backtrack_rho,
+        max_ls_steps=max_ls_steps,
+        linear_solver=linear_solver,
+        krylov_tol=krylov_tol,
+        krylov_maxiter=krylov_maxiter,
+        krylov_restart=krylov_restart,
+    )
     if strict_validation not in (False, True, "checkify"):
         raise ValueError(
             f"strict_validation must be False, True, or 'checkify', "
@@ -180,18 +185,19 @@ def make_mcp_solver(
         )
 
     def _poisoned_solve(l, u, x0, theta):
-        invalid = traced_invalid_mask(l, u)
-        safe_l, safe_u = sanitize_bounds(l, u)
-        result = _solve(safe_l, safe_u, x0, theta)
+        invalid = traced_invalid_mask(l, u, x0)
+        safe_l, safe_u, safe_x0 = sanitize_inputs(l, u, x0)
+        result = _solve(safe_l, safe_u, safe_x0, theta)
         if return_aux:
             x_star, aux = result
             x_star = jnp.where(invalid, jnp.full_like(x_star, jnp.nan), x_star)
             return x_star, _poison_aux(aux, invalid)
         return jnp.where(invalid, jnp.full_like(result, jnp.nan), result)
 
-    def _checks(l, u):
+    def _checks(l, u, x0):
         checkify.check(~jnp.any(jnp.isnan(l)), "l contains NaN")
         checkify.check(~jnp.any(jnp.isnan(u)), "u contains NaN")
+        checkify.check(~jnp.any(jnp.isnan(x0)), "x0 contains NaN")
         checkify.check(jnp.all(l <= u), "l must be <= u element-wise")
 
     def solve_checked(l, u, x0, theta):
@@ -214,7 +220,7 @@ def make_mcp_solver(
             x0 = jnp.asarray(x0)
             theta = jnp.asarray(theta)
             validate_bounds_and_x0(l, u, x0)
-            _checks(l, u)
+            _checks(l, u, x0)
             return _solve(l, u, x0, theta)
 
         return checkify.checkify(_checkify_target)

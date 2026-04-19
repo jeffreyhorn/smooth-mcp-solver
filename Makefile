@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lint typecheck format test test-fast coverage clean
+.PHONY: help install install-dev lint typecheck format test test-fast test-slow test-examples coverage clean
 
 # Detect virtual environment
 VENV_BIN := $(shell if [ -d ".venv/bin" ]; then echo ".venv/bin/"; else echo ""; fi)
@@ -13,8 +13,10 @@ help:
 	@echo "  lint            - Run code linters (ruff, mypy, black)"
 	@echo "  typecheck       - Run mypy type checker only"
 	@echo "  format          - Format code with black and ruff"
-	@echo "  test            - Run all tests with pytest"
+	@echo "  test            - Run all tests with pytest (skips slow by default)"
 	@echo "  test-fast       - Run tests excluding slow gradient tests"
+	@echo "  test-slow       - Run only slow-tagged tests (e.g., bound_optimization demo)"
+	@echo "  test-examples   - Smoke-test fast demos (subset of 'test')"
 	@echo "  coverage        - Run tests with coverage report"
 	@echo "  clean           - Remove build artifacts and caches"
 	@echo ""
@@ -56,6 +58,14 @@ test:
 # Run fast tests only (skip slow gradient tests)
 test-fast:
 	$(PYTHON) -m pytest tests/ -v --ignore=tests/test_gradients.py
+
+# Run only slow-tagged tests (bypasses the default "-m 'not slow'" in pyproject).
+test-slow:
+	$(PYTHON) -m pytest tests/ -v -m slow
+
+# Smoke-test fast demos (runs each as a subprocess; included in 'test').
+test-examples:
+	$(PYTHON) -m pytest tests/test_demos.py -v
 
 # Run tests with coverage
 coverage:

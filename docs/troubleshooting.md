@@ -12,20 +12,18 @@
 
 - **Singular Jacobian**: Increase `regularize` (e.g., `1e-8`). This is common with symmetric initial guesses on symmetric problems.
 - **GMRES failure**: If using `linear_solver="gmres"`, a failed GMRES solve propagates NaN. Increase `krylov_maxiter` or loosen `krylov_tol`.
-- **NaN in bounds**: `l` and `u` must not contain NaN. Use `jnp.inf` / `-jnp.inf` for unbounded components.
-- **`strict_validation=True` poisoning the output**: If you built the solver with `strict_validation=True`, `NaN` output means the solver detected invalid bounds under tracing (`l > u` or NaN in `l`/`u`). Check `SolveInfo.converged` (it will be `False` for poisoned rows) or inspect the inputs.
+- **NaN in bounds or `x0`**: `l`, `u`, and `x0` must not contain NaN. Use `jnp.inf` / `-jnp.inf` for unbounded components; pass a concrete initial guess for `x0`.
+- **`strict_validation=True` poisoning the output**: If you built the solver with `strict_validation=True`, `NaN` output means the solver detected invalid inputs under tracing (`l > u`, NaN in `l`/`u`, or NaN in `x0`). Check `SolveInfo.converged` (it will be `False` for poisoned rows) or inspect the inputs.
 
 ## Invalid bounds not rejected under `jax.jit` / `jax.grad` / `jax.vmap`
 
-Symptom: you pass `l > u` or NaN bounds into a jitted or vmapped call and the solver returns a finite number instead of raising.
+As of 2026-04-18, the factory default is now `strict_validation=True`, so invalid traced inputs produce `NaN` output and `SolveInfo.converged=False` instead of silently flowing through. If you still see a finite result from invalid inputs, that can mean either you explicitly opted out with `strict_validation=False`, or you built the solver with `strict_validation="checkify"` and did not inspect the returned `Error` object (for example by calling `err.throw()` or `err.get()`).
 
-Cause: by default, value checks are skipped under tracing because the concrete values are not available. Only shape checks survive.
+Options (see [Input validation](api.md#input-validation) in `docs/api.md`):
 
-Fix — pick whichever matches your pipeline (see [Input validation](api.md#input-validation) in `docs/api.md`):
-
-- Bounds are static across the training loop: call `preflight_validate(l, u, x0)` once before entering the loop.
-- Bounds are traced, batched, or learned: build the solver with `strict_validation=True` (on `make_mcp_solver` or `make_mcp_solver_diff`). Invalid rows produce `NaN` output and `SolveInfo.converged=False`.
-- You want raised exceptions: use `strict_validation="checkify"` (on `make_mcp_solver` or `make_mcp_solver_diff`) and call `err.throw()`.
+- **Default**: nothing to do — factories already poison invalid traced inputs. Inspect `SolveInfo.converged` or check for NaN in the output.
+- **Want raised exceptions**: build the solver with `strict_validation="checkify"` and call `err.throw()`.
+- **Static bounds + tight inner loop**: call `preflight_validate(l, u, x0)` once before entering the loop, then opt out with `strict_validation=False` for zero per-call overhead.
 
 ## NaN in gradients (forward solve is fine)
 

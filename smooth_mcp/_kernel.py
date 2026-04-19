@@ -14,9 +14,10 @@ from smooth_mcp.smoothing import smoothed_residual
 def validate_bounds_and_x0(l, u, x0):
     """Validate shapes, NaN, and ordering of bounds and initial guess.
 
-    Shape checks always run. Value checks (NaN, ordering) are skipped
-    when inside any JAX tracing context (for example, jit, grad,
-    vmap, or pmap), since they require concrete values.
+    Shape checks always run. Value checks (NaN in ``l``, ``u``, or ``x0``;
+    ordering ``l <= u``) are skipped when inside any JAX tracing context
+    (for example, jit, grad, vmap, or pmap), since they require concrete
+    values.
     """
     if l.shape != u.shape:
         raise ValueError(
@@ -29,10 +30,102 @@ def validate_bounds_and_x0(l, u, x0):
     try:
         if jnp.any(jnp.isnan(l)) or jnp.any(jnp.isnan(u)):
             raise ValueError("Bounds l and u must not contain NaN")
+        if jnp.any(jnp.isnan(x0)):
+            raise ValueError("x0 must not contain NaN")
         if jnp.any(l > u):
             raise ValueError("Lower bounds must not exceed upper bounds (l <= u)")
     except jax.errors.TracerBoolConversionError:
         pass
+
+
+def validate_solver_options(
+    *,
+    mu_init,
+    mu_min,
+    mu_decay,
+    max_mu_steps,
+    newton_tol,
+    regularize,
+    armijo_c,
+    backtrack_rho,
+    max_ls_steps,
+    linear_solver,
+    krylov_tol,
+    krylov_maxiter,
+    krylov_restart,
+):
+    """Validate public continuation, Newton, line-search, and forward-Krylov
+    options shared by ``solve_mcp``, ``make_mcp_solver``, and
+    ``make_mcp_solver_diff``.
+
+    Raises ``ValueError`` on any invalid value. Called at the public-API
+    boundary so bad settings fail immediately instead of drifting into
+    JAX internals as opaque errors.
+    """
+    if mu_init <= 0:
+        raise ValueError(f"mu_init must be positive, got {mu_init}")
+    if mu_min <= 0:
+        raise ValueError(f"mu_min must be positive, got {mu_min}")
+    if mu_min > mu_init:
+        raise ValueError(
+            f"mu_min must be <= mu_init, got mu_min={mu_min}, mu_init={mu_init}"
+        )
+    if mu_decay <= 0 or mu_decay >= 1:
+        raise ValueError(f"mu_decay must be in (0, 1), got {mu_decay}")
+    if max_mu_steps < 1:
+        raise ValueError(f"max_mu_steps must be >= 1, got {max_mu_steps}")
+    if newton_tol < 0:
+        raise ValueError(f"newton_tol must be non-negative, got {newton_tol}")
+    if regularize < 0:
+        raise ValueError(f"regularize must be non-negative, got {regularize}")
+    if armijo_c <= 0 or armijo_c >= 1:
+        raise ValueError(f"armijo_c must be in (0, 1), got {armijo_c}")
+    if backtrack_rho <= 0 or backtrack_rho >= 1:
+        raise ValueError(f"backtrack_rho must be in (0, 1), got {backtrack_rho}")
+    if max_ls_steps < 0:
+        raise ValueError(f"max_ls_steps must be >= 0, got {max_ls_steps}")
+    if linear_solver not in ("dense", "gmres"):
+        raise ValueError(
+            f"linear_solver must be 'dense' or 'gmres', got {linear_solver!r}"
+        )
+    if krylov_tol <= 0:
+        raise ValueError(f"krylov_tol must be positive, got {krylov_tol}")
+    if krylov_maxiter < 1:
+        raise ValueError(f"krylov_maxiter must be >= 1, got {krylov_maxiter}")
+    if krylov_restart < 1:
+        raise ValueError(f"krylov_restart must be >= 1, got {krylov_restart}")
+
+
+def validate_adjoint_options(
+    *,
+    adjoint_method,
+    gmres_tol,
+    gmres_maxiter,
+    gmres_restart,
+    cg_tol,
+    cg_maxiter,
+):
+    """Validate adjoint (backward-pass) solver options used by
+    ``make_mcp_solver_diff``.
+
+    Raises ``ValueError`` on any invalid value. Validated unconditionally
+    regardless of ``adjoint_method`` so a bad knob is rejected even when
+    the alternative solver is selected.
+    """
+    if adjoint_method not in ("gmres", "cg"):
+        raise ValueError(
+            f"adjoint_method must be 'gmres' or 'cg', got {adjoint_method!r}"
+        )
+    if gmres_tol <= 0:
+        raise ValueError(f"gmres_tol must be positive, got {gmres_tol}")
+    if gmres_maxiter < 1:
+        raise ValueError(f"gmres_maxiter must be >= 1, got {gmres_maxiter}")
+    if gmres_restart < 1:
+        raise ValueError(f"gmres_restart must be >= 1, got {gmres_restart}")
+    if cg_tol <= 0:
+        raise ValueError(f"cg_tol must be positive, got {cg_tol}")
+    if cg_maxiter < 1:
+        raise ValueError(f"cg_maxiter must be >= 1, got {cg_maxiter}")
 
 
 def preflight_validate(l, u, x0):
@@ -43,7 +136,8 @@ def preflight_validate(l, u, x0):
     up front, with zero per-call overhead inside the traced region.
 
     Accepts array-likes (lists, scalars, numpy or JAX arrays). Raises
-    ``ValueError`` on invalid shapes, NaN bounds, or ``l > u``.
+    ``ValueError`` on invalid shapes, NaN in ``l``/``u``/``x0``, or
+    ``l > u``.
 
     Under tracing, value checks are silently skipped (same convention as
     the solver factories). Supported validation options are:
@@ -60,17 +154,22 @@ def preflight_validate(l, u, x0):
     validate_bounds_and_x0(l_arr, u_arr, x0_arr)
 
 
-def traced_invalid_mask(l, u):
-    """Return a scalar JAX bool that is True when bounds are invalid.
+def traced_invalid_mask(l, u, x0):
+    """Return a scalar JAX bool that is True when inputs are invalid.
 
-    Detects: NaN in ``l``, NaN in ``u``, or any element with ``l > u``.
-    Used by NaN-poisoning strict validation; safe to trace under jit,
-    grad, and vmap.
+    Detects: NaN in ``l``, NaN in ``u``, NaN in ``x0``, or any element
+    with ``l > u``. Used by NaN-poisoning strict validation; safe to
+    trace under jit, grad, and vmap.
     """
-    return jnp.any(jnp.isnan(l)) | jnp.any(jnp.isnan(u)) | jnp.any(l > u)
+    return (
+        jnp.any(jnp.isnan(l))
+        | jnp.any(jnp.isnan(u))
+        | jnp.any(jnp.isnan(x0))
+        | jnp.any(l > u)
+    )
 
 
-def sanitize_bounds(l, u):
+def sanitize_inputs(l, u, x0):
     """Replace NaNs and fix ordering so the solver sees well-defined inputs.
 
     This is only meaningful paired with ``traced_invalid_mask``: the
@@ -82,7 +181,8 @@ def sanitize_bounds(l, u):
     safe_u = jnp.where(jnp.isnan(u), jnp.ones_like(u), u)
     lo = jnp.minimum(safe_l, safe_u)
     hi = jnp.maximum(safe_l, safe_u)
-    return lo, hi
+    safe_x0 = jnp.where(jnp.isnan(x0), jnp.zeros_like(x0), x0)
+    return lo, hi, safe_x0
 
 
 def normalize_F(F_fn):

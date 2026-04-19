@@ -351,3 +351,83 @@ class TestRuntimeValidation:
                 jnp.array([0.5]),
                 jnp.zeros(0),
             )
+
+    def test_nan_x0(self):
+        with pytest.raises(ValueError, match="x0 must not contain NaN"):
+            self._solver()(
+                jnp.array([0.0]),
+                jnp.array([1.0]),
+                jnp.array([jnp.nan]),
+                jnp.zeros(0),
+            )
+
+
+# ---------------------------------------------------------------------------
+# jax.vmap support
+# ---------------------------------------------------------------------------
+
+
+class TestForwardVmap:
+    """Batching over the forward-only factory via ``jax.vmap``.
+
+    The forward factory documents ``jax.vmap`` support; these tests pin
+    the contract on shapes, finiteness, per-batch parity, and composition
+    with ``jax.jit``.
+    """
+
+    _L = jnp.zeros(2)
+    _U = jnp.full(2, jnp.inf)
+    _X0 = jnp.zeros(2)
+
+    def _lcp_F(self, x, theta):
+        M = theta.reshape(2, 2)
+        return M @ x + jnp.array([1.0, -2.0])
+
+    def test_vmap_over_theta(self):
+        solver = make_mcp_solver(self._lcp_F)
+        theta0 = jnp.array([[2.0, -1.0], [-1.0, 3.0]]).flatten()
+        thetas = jnp.stack([theta0, theta0 + 0.1, theta0 - 0.05])
+
+        batched = jax.vmap(solver, in_axes=(None, None, None, 0))
+        xs = batched(self._L, self._U, self._X0, thetas)
+
+        assert xs.shape == (3, 2)
+        assert jnp.all(jnp.isfinite(xs))
+
+        # Per-row parity with unbatched calls
+        for i in range(3):
+            x_ref = solver(self._L, self._U, self._X0, thetas[i])
+            assert jnp.allclose(xs[i], x_ref)
+
+    def test_jit_vmap(self):
+        solver = make_mcp_solver(self._lcp_F)
+        theta0 = jnp.array([[2.0, -1.0], [-1.0, 3.0]]).flatten()
+        thetas = jnp.stack([theta0, theta0 + 0.1])
+        ls = jnp.tile(self._L, (2, 1))
+        us = jnp.tile(self._U, (2, 1))
+        x0s = jnp.tile(self._X0, (2, 1))
+
+        jit_vmap = jax.jit(jax.vmap(solver))
+        xs = jit_vmap(ls, us, x0s, thetas)
+
+        assert xs.shape == (2, 2)
+        assert jnp.all(jnp.isfinite(xs))
+
+        # Second call reuses the compiled graph and matches
+        xs2 = jit_vmap(ls, us, x0s, thetas)
+        assert jnp.allclose(xs, xs2)
+
+    def test_vmap_return_aux_shape(self):
+        solver = make_mcp_solver(self._lcp_F, return_aux=True)
+        theta0 = jnp.array([[2.0, -1.0], [-1.0, 3.0]]).flatten()
+        thetas = jnp.stack([theta0, theta0 + 0.1, theta0 - 0.05])
+
+        batched = jax.vmap(solver, in_axes=(None, None, None, 0))
+        xs, infos = batched(self._L, self._U, self._X0, thetas)
+
+        assert xs.shape == (3, 2)
+        assert infos.mu_used.shape == (3,)
+        assert infos.num_steps.shape == (3,)
+        assert infos.residual_norm.shape == (3,)
+        assert infos.converged.shape == (3,)
+        assert jnp.all(infos.converged)
