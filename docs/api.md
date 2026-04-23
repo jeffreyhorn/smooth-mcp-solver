@@ -167,7 +167,7 @@ Accepted by `solve_mcp`, `make_mcp_solver`, and `make_mcp_solver_diff`:
 | `max_mu_steps` | `50` | Maximum continuation steps |
 | `armijo_c` | `1e-4` | Armijo sufficient decrease parameter |
 | `backtrack_rho` | `0.5` | Line search contraction factor |
-| `max_ls_steps` | `20` | Maximum line search steps |
+| `max_ls_steps` | `20` | Maximum backtracking steps in the Armijo line search. The search always evaluates `alpha=1` first (Armijo-checked) and then backtracks up to `max_ls_steps` times. If no `alpha` passes Armijo, the step is rejected (`alpha=0`, iterate unchanged) — the merit function is never increased. `max_ls_steps=0` means "try `alpha=1` only, reject if it fails." |
 
 ## Forward linear solver options
 

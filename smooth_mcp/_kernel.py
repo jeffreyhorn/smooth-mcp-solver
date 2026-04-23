@@ -260,6 +260,15 @@ def make_newton_solver(
     Returns a function solve(x0, mu) -> x. The returned function is pure
     JAX and can be traced by jax.jit or used inside lax.while_loop.
 
+    The inner line search enforces the Armijo sufficient-decrease
+    condition on phi(x) = 0.5 * ||H(x, mu)||^2. It tries ``alpha=1`` and
+    then backtracks up to ``max_ls_steps`` times by factor
+    ``backtrack_rho``. After the backtracking loop a final Armijo check
+    runs on the resulting alpha: if it still fails the step is rejected
+    (``alpha_effective=0``, iterate unchanged), so phi is never
+    increased. ``max_ls_steps=0`` means "try ``alpha=1`` only,
+    Armijo-checked"; it does not disable the check.
+
     For repeated solves with the same problem, see ``make_mcp_solver_diff``
     for a differentiable MCP solver interface.
     """
@@ -322,7 +331,21 @@ def make_newton_solver(
                 return alpha * backtrack_rho, ls_it + 1
 
             alpha_final, _ = lax.while_loop(ls_cond, ls_body, (1.0, 0))
-            x_new = x + alpha_final * d
+
+            # Budget exhaustion may have ended the loop with Armijo still
+            # unmet, so recheck and reject the step (alpha_effective = 0)
+            # if it doesn't achieve sufficient decrease. Applied uniformly,
+            # including max_ls_steps=0 (which means "try alpha=1 only,
+            # Armijo-checked"). On rejection the iterate is unchanged and
+            # phi does not increase; Newton stalls here and the outer
+            # continuation kernel advances to a smaller mu.
+            x_trial = x + alpha_final * d
+            phi_trial = 0.5 * jnp.sum(_residual(x_trial, mu) ** 2)
+            sufficient = phi_trial <= phi0 + armijo_c * alpha_final * dir_deriv
+            alpha_effective = jnp.where(
+                sufficient, alpha_final, jnp.zeros_like(alpha_final)
+            )
+            x_new = x + alpha_effective * d
             H_new = _residual(x_new, mu)
             return x_new, H_new, it + 1
 
