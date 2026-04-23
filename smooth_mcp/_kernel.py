@@ -356,6 +356,16 @@ def make_continuation_solver(
     uses lax.while_loop for the outer continuation, keeping all values as
     JAX arrays. No Python control flow, no float() coercions — fully
     traceable by jax.jit, jax.grad, etc.
+
+    ``mu_used`` is the last smoothing parameter at which the Newton solve
+    actually ran — i.e. the ``mu`` for which ``x_star`` is (approximately)
+    the fixed point of H(x, mu)=0. The convergence test is measured at
+    ``mu_min`` (the limiting system), so ``converged=True`` with
+    ``mu_used > mu_min`` means the solver stopped early because the
+    residual at ``mu_min`` already passed the tolerance, not because the
+    continuation reached ``mu_min``. Differentiating at ``mu_used``
+    (implicit differentiation of H(·, mu_used)=0) is consistent with the
+    returned ``x_star``.
     """
 
     def _residual_norm_at(x, mu):
@@ -376,7 +386,7 @@ def make_continuation_solver(
             x_new = newton_solve(x, mu_next)
             res = _residual_norm_at(x_new, mu_min_arr)
             converged = res < newton_tol_arr
-            mu_used_new = jnp.where(converged, mu_min_arr, mu_next)
+            mu_used_new = mu_next
             mu_next_new = jnp.maximum(mu_next * mu_decay_arr, mu_min_arr)
             return x_new, mu_next_new, mu_used_new, step + 1, converged
 

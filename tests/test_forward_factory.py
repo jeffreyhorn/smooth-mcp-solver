@@ -256,18 +256,34 @@ class TestMuUsed:
         assert float(info.mu_used) <= 1.0  # mu_init default
         assert float(info.mu_used) > 0.0
 
-    def test_mu_used_equals_mu_min_on_full_convergence(self):
-        """When converged, terminal mu is clamped to mu_min."""
+    def test_mu_used_reports_last_solved_mu_on_early_convergence(self):
+        """mu_used is the last mu the Newton solve ran at, not mu_min.
+
+        When the residual at mu_min passes the tolerance before the
+        continuation drives mu all the way down to mu_min, the solver
+        stops early. The returned x_star is the fixed point of
+        H(x, mu_used), not of H(x, mu_min), so mu_used must report the
+        coarser mu that was actually solved. A looser newton_tol is
+        used so early stop fires well above mu_min under the suite's
+        float64 setting; the default tol is tight enough that the
+        continuation on this problem reaches mu_min anyway.
+        """
 
         def F(x):
             return x - jnp.array([2.0])
 
-        solver = make_mcp_solver(F, mu_min=1e-10, return_aux=True)
+        solver = make_mcp_solver(
+            F, mu_init=1.0, mu_min=1e-10, newton_tol=1e-4, return_aux=True
+        )
         _, info = solver(
             jnp.array([0.0]), jnp.array([3.0]), jnp.array([1.0]), jnp.zeros(0)
         )
         assert bool(info.converged) is True
-        assert jnp.isclose(info.mu_used, 1e-10, rtol=1e-6)
+        # Early stop: mu_used should sit well above mu_min=1e-10. The
+        # OLD clamped semantics would have reported mu_used == mu_min;
+        # asserting mu_used > 1e-5 rules that out.
+        assert float(info.mu_used) > 1e-5
+        assert float(info.mu_used) <= 1.0  # never exceeds mu_init
 
 
 # ---------------------------------------------------------------------------

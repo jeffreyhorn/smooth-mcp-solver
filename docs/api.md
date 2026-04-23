@@ -147,9 +147,9 @@ NamedTuple returned alongside `x_star` when `return_aux=True`.
 
 | Field | Type | Description |
 |---|---|---|
-| `mu_used` | array | Terminal smoothing parameter reached |
+| `mu_used` | array | Last smoothing parameter at which the Newton solve ran. May be `> mu_min` when the residual at `mu_min` passed the tolerance before continuation reached `mu_min` — gradients in `make_mcp_solver_diff` are taken at this `mu_used`. |
 | `num_steps` | array | Continuation steps taken |
-| `residual_norm` | array | Max absolute smoothed residual at `mu_min` |
+| `residual_norm` | array | Max absolute smoothed residual at `mu_min` (the limiting system, not `mu_used`) |
 | `converged` | array | `residual_norm < newton_tol` |
 
 `SolveInfo` fields are JAX arrays (not Python scalars) and are stop-gradiented — gradients flow through `x_star` only.

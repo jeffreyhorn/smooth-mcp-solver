@@ -55,10 +55,14 @@ def make_mcp_solver_diff(
 
     The backward pass uses implicit differentiation with a Jacobian-free
     iterative linear solve for the adjoint system. Gradients are computed
-    at the actual terminal smoothing parameter from the forward solve (not
-    necessarily mu_min). This means truncated solves (small max_mu_steps)
-    produce gradients consistent with the smoothed system that was actually
-    solved, rather than the fully-converged system.
+    at ``SolveInfo.mu_used`` — the last smoothing parameter at which the
+    Newton solve actually ran. This is the ``mu`` for which ``x_star`` is
+    (approximately) the fixed point of H(x, mu)=0, so the implicit-
+    differentiation adjoint is consistent with the returned solution.
+    ``mu_used`` may be larger than ``mu_min`` when the residual at
+    ``mu_min`` passed the tolerance before continuation reached
+    ``mu_min``; in that case gradients reflect the coarser system that
+    was actually solved, not the fully-smoothed limit.
 
     Args:
         F_fn: Residual map. Either F(x) -> array or F(x, theta) -> array.
