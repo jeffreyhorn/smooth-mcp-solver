@@ -76,7 +76,7 @@ x_star, info = solver(l, u, x0, theta)
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `return_aux` | bool | `False` | Return `(x_star, SolveInfo)` instead of just `x_star` |
-| `strict_validation` | bool or str | `False` | Opt-in traced validation — see [Input validation](#input-validation) |
+| `strict_validation` | bool or str | `True` | Traced validation mode — `True` (NaN-poisoning, default), `False` (skip checks under tracing), or `"checkify"`. See [Input validation](#input-validation). |
 
 **Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`). If `strict_validation="checkify"`, the signature is wrapped to return `(Error, ...)` per `jax.experimental.checkify` conventions.
 
@@ -123,8 +123,11 @@ grad = jax.grad(loss)(theta)              # implicit differentiation
 | `precond` | callable or None | `None` | Preconditioner `M(v) -> v` for adjoint solve |
 | `differentiate_through_x0` | bool | `False` | Enable straight-through gradients for `x0` |
 | `return_aux` | bool | `False` | Return `(x_star, SolveInfo)` instead of just `x_star` |
+| `strict_validation` | bool or str | `True` | Traced validation mode — `True` (NaN-poisoning, default), `False` (skip checks under tracing), or `"checkify"`. See [Input validation](#input-validation). |
 
-**Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`).
+**Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`). If `strict_validation="checkify"`, the signature is wrapped to return `(Error, ...)` per `jax.experimental.checkify` conventions.
+
+Gradients are taken at `SolveInfo.mu_used` — the last smoothing parameter at which the Newton solve ran — so the implicit-differentiation adjoint is consistent with the returned `x_star`. On early-stop runs (where the residual at `mu_min` passed before the continuation reached `mu_min`), `mu_used` exceeds `mu_min` and the gradient reflects the coarser system that was actually solved, not the fully-smoothed limit.
 
 **Note:** `solve_mcp` cannot be JIT-compiled because it returns Python scalars. Use `make_mcp_solver` (forward-only) or `make_mcp_solver_diff` (differentiable) for JIT-compatible code.
 
