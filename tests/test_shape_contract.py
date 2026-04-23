@@ -153,3 +153,40 @@ class TestVmapStillWorks:
         assert xs.shape == (3, 2)
         # Solutions are max(theta, 0) for the identity-minus-theta map.
         assert jnp.allclose(xs, jnp.maximum(thetas, 0.0))
+
+
+# ---------------------------------------------------------------------------
+# vmap rejection: when the batched input makes the per-body state rank >= 2,
+# the boundary check must still fire inside the vmapped body.
+# ---------------------------------------------------------------------------
+
+
+class TestVmapRejects2DBody:
+    def _rank3_batch(self):
+        # Shape (B=3, N=2, M=1): vmap over axis 0 leaves (2, 1) inside the body.
+        l = jnp.zeros((3, 2, 1))
+        u = jnp.full((3, 2, 1), jnp.inf)
+        x0 = jnp.zeros((3, 2, 1))
+        theta = jnp.zeros((3, 2, 1))
+        return l, u, x0, theta
+
+    def test_vmap_forward_rejects_2d_body(self):
+        solver = make_mcp_solver(_F)
+        batched = jax.vmap(solver, in_axes=(0, 0, 0, 0))
+        l, u, x0, theta = self._rank3_batch()
+        with pytest.raises(ValueError, match=r"must be a 1D array"):
+            batched(l, u, x0, theta)
+
+    def test_vmap_diff_rejects_2d_body(self):
+        solver = make_mcp_solver_diff(_F)
+        batched = jax.vmap(solver, in_axes=(0, 0, 0, 0))
+        l, u, x0, theta = self._rank3_batch()
+        with pytest.raises(ValueError, match=r"must be a 1D array"):
+            batched(l, u, x0, theta)
+
+    def test_jit_of_vmap_rejects_2d_body(self):
+        solver = make_mcp_solver_diff(_F)
+        batched = jax.jit(jax.vmap(solver, in_axes=(0, 0, 0, 0)))
+        l, u, x0, theta = self._rank3_batch()
+        with pytest.raises(ValueError, match=r"must be a 1D array"):
+            batched(l, u, x0, theta)
