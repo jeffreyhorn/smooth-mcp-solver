@@ -18,7 +18,21 @@ def validate_bounds_and_x0(l, u, x0):
     ordering ``l <= u``) are skipped when inside any JAX tracing context
     (for example, jit, grad, vmap, or pmap), since they require concrete
     values.
+
+    The solver supports only 1D vector state. ``l``, ``u``, and ``x0`` must
+    each have ``ndim == 1``. Higher-rank inputs are rejected at the public
+    API boundary with a clear ``ValueError`` rather than falling through
+    into JAX internals (where they surface as an opaque JVP shape error).
+    Users with naturally multidimensional state should flatten before
+    calling the solver and reshape the result.
     """
+    for name, arr in (("l", l), ("u", u), ("x0", x0)):
+        if arr.ndim != 1:
+            raise ValueError(
+                f"{name} must be a 1D array, got ndim={arr.ndim} with shape {arr.shape}. "
+                f"The solver supports only 1D vector state; flatten higher-rank "
+                f"inputs with .ravel() and reshape the result."
+            )
     if l.shape != u.shape:
         raise ValueError(
             f"l and u must have the same shape, got {l.shape} and {u.shape}"

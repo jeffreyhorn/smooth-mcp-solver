@@ -33,9 +33,9 @@ result = solve_mcp(F, l, u, x0)
 | Argument | Type | Description |
 |---|---|---|
 | `F_fn` | callable | `F(x)` or `F(x, theta)` |
-| `l` | array | Lower bounds |
-| `u` | array | Upper bounds (`jnp.inf` for unbounded) |
-| `x0` | array | Initial guess (same shape as `l`) |
+| `l` | 1D array | Lower bounds |
+| `u` | 1D array | Upper bounds (`jnp.inf` for unbounded) |
+| `x0` | 1D array | Initial guess (same shape as `l`) |
 | `theta` | array, optional | Parameters for `F(x, theta)`. Optional if `F` takes only `x`. |
 | `verbose` | bool | Print per-step progress (default `False`) |
 
@@ -205,12 +205,13 @@ All three entry points accept `F_fn` in two forms:
 
 > **Migration note (2026-04-18):** the factory default for `strict_validation` changed from `False` to `True`. Invalid traced inputs now produce `NaN` output and `SolveInfo.converged=False` instead of silent finite results. If you relied on the old default and your bounds are always valid, pass `strict_validation=False` explicitly to restore the previous fast path.
 
-All three entry points enforce three checks on `l`, `u`, and `x0`:
+All three entry points enforce these checks on `l`, `u`, and `x0`:
+- Rank check: `l`, `u`, and `x0` must each be 1D (`ndim == 1`). The solver supports only 1D vector state; higher-rank inputs raise `ValueError` at the public boundary. For problems with multidimensional state, flatten with `.ravel()` before calling the solver and reshape the result.
 - Shape checks: all three arrays must have the same shape.
 - NaN checks: `l`, `u`, and `x0` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
-Shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
+Rank and shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
 
 - **Eager execution** — full value checks run. Invalid input raises `ValueError`.
 - **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — the factory default is now **safe**: `make_mcp_solver` and `make_mcp_solver_diff` both construct with `strict_validation=True` (NaN-poisoning), so invalid traced bounds or `x0` produce `NaN` output (and `SolveInfo.converged=False` with `return_aux=True`) instead of silently flowing through. Pass `strict_validation=False` to opt out of the check — see mode 4 below.
