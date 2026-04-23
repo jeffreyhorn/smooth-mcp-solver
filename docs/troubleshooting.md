@@ -66,6 +66,15 @@ solver(l, u, x0, theta)                   # works
 - Passing a scalar where an array is expected: use `jnp.array([0.0])` not `0.0`.
 - Mismatched dimensions between bounds and initial guess.
 
-## Float32 warnings or poor accuracy
+## Poor convergence or NaN gradients at default float32
 
-This solver requires float64. Add `jax.config.update("jax_enable_x64", True)` at the top of your script, before any JAX array operations. See [Float64](installation.md#float64) in `docs/installation.md` for details.
+This solver is tested only at float64. Running at float32 is not rejected, but it is also not validated — default tolerances (`newton_tol=1e-10`, `gmres_tol=1e-8`, `mu_min=1e-12`) are below float32's ~`1e-7` relative precision, so Newton may stall, the adjoint GMRES may NaN out, or `converged` may flip the "wrong" way.
+
+Enable float64 before any JAX array operation:
+
+```python
+import jax
+jax.config.update("jax_enable_x64", True)
+```
+
+See [Float64](installation.md#float64) in `docs/installation.md` for the full rationale.
