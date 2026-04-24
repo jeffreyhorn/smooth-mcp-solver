@@ -30,12 +30,27 @@ from smooth_mcp.smoothing import smoothed_residual
 
 
 def validate_strict_validation(strict_validation):
-    """Reject unsupported ``strict_validation`` values early."""
-    if strict_validation not in (False, True, "checkify"):
-        raise ValueError(
-            f"strict_validation must be False, True, or 'checkify', "
-            f"got {strict_validation!r}"
-        )
+    """Reject unsupported ``strict_validation`` values early.
+
+    Uses ``is`` identity checks for the boolean cases rather than
+    membership (``in (False, True, ...)``). Membership tests with
+    ``==``, which accepts ``1``, ``0``, ``numpy.bool_(True)``, and
+    other values that compare equal to ``True``/``False``; those
+    would then slip past the ``build_public_solve`` branch (which is
+    ``strict_validation is True``) and silently behave like
+    ``strict_validation=False``. Strict identity rejects them up
+    front with the same clear error as any other bad value.
+    """
+    if (
+        strict_validation is True
+        or strict_validation is False
+        or strict_validation == "checkify"
+    ):
+        return
+    raise ValueError(
+        f"strict_validation must be False, True, or 'checkify', "
+        f"got {strict_validation!r}"
+    )
 
 
 def build_forward_kernel(
