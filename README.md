@@ -38,7 +38,7 @@ Rather than solving the smoothed system at a single small `mu` (which would be n
 3. Reduce `mu` by a factor (default `mu_decay = 0.5`), using the previous solution as the initial guess
 4. Repeat until `mu` reaches `mu_min` (default `1e-12`)
 
-Each Newton step computes the Jacobian via `jax.jacfwd` and solves a dense linear system. The line search enforces the Armijo sufficient-decrease condition on the merit function `||H(x)||^2 / 2`: it backtracks up to `max_ls_steps` times and, if no step passes Armijo, rejects the step (applies `alpha=0`, iterate unchanged). Newton then stalls at this `mu` and the continuation kernel advances to a smaller `mu` where the system is less nonlinear. The merit function is therefore non-increasing across Newton steps.
+Each Newton step computes the Jacobian via `jax.jacfwd` and solves a dense linear system. The line search enforces the Armijo sufficient-decrease condition on the merit function `||H(x)||^2 / 2`: it backtracks up to `max_ls_steps` times and, if no step passes Armijo, rejects the step (iterate unchanged, merit function not increased). Newton then stalls at this `mu` and the continuation kernel advances to the next smaller `mu` in its schedule — a smaller `mu` is less smoothed and closer to the non-smooth limit, so this does not guarantee recovery, but it allows the overall solve to report `converged=False` rather than blow up on a bad step. The merit function is therefore non-increasing across Newton steps.
 
 ### Implicit differentiation
 

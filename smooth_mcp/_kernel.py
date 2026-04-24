@@ -333,19 +333,20 @@ def make_newton_solver(
             alpha_final, _ = lax.while_loop(ls_cond, ls_body, (1.0, 0))
 
             # Budget exhaustion may have ended the loop with Armijo still
-            # unmet, so recheck and reject the step (alpha_effective = 0)
-            # if it doesn't achieve sufficient decrease. Applied uniformly,
-            # including max_ls_steps=0 (which means "try alpha=1 only,
-            # Armijo-checked"). On rejection the iterate is unchanged and
-            # phi does not increase; Newton stalls here and the outer
-            # continuation kernel advances to a smaller mu.
+            # unmet, so recheck and reject the step directly rather than
+            # encoding rejection as alpha=0. Selecting between x_trial and
+            # x with jnp.where keeps the rejected branch independent of
+            # d, so a NaN in d (e.g., from a failed GMRES forward solve
+            # that set d = NaN via the info check) cannot propagate into
+            # x via 0 * NaN. Applied uniformly, including max_ls_steps=0
+            # (which means "try alpha=1 only, Armijo-checked"). On
+            # rejection the iterate is unchanged and phi does not
+            # increase; Newton stalls here and the outer continuation
+            # kernel advances to the next mu in the schedule.
             x_trial = x + alpha_final * d
             phi_trial = 0.5 * jnp.sum(_residual(x_trial, mu) ** 2)
             sufficient = phi_trial <= phi0 + armijo_c * alpha_final * dir_deriv
-            alpha_effective = jnp.where(
-                sufficient, alpha_final, jnp.zeros_like(alpha_final)
-            )
-            x_new = x + alpha_effective * d
+            x_new = jnp.where(sufficient, x_trial, x)
             H_new = _residual(x_new, mu)
             return x_new, H_new, it + 1
 
