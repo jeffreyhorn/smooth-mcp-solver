@@ -86,7 +86,21 @@ class TestHigherRankRejected:
             solve_mcp(_F, l, u, x0, theta)
 
     def test_solve_mcp_rejects_scalar(self):
+        # Scalar (0D) inputs are rejected by the same ndim-check as
+        # higher-rank inputs. The error message must cover the scalar
+        # case explicitly (jnp.atleast_1d is the expected remedy), not
+        # only higher-rank inputs via .ravel().
         with pytest.raises(ValueError, match=r"must be a 1D array"):
+            solve_mcp(
+                _F,
+                jnp.array(0.0),
+                jnp.array(1.0),
+                jnp.array(0.5),
+                jnp.array(1.0),
+            )
+
+    def test_scalar_error_message_mentions_atleast_1d(self):
+        with pytest.raises(ValueError, match=r"atleast_1d"):
             solve_mcp(
                 _F,
                 jnp.array(0.0),
