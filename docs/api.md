@@ -33,9 +33,9 @@ result = solve_mcp(F, l, u, x0)
 | Argument | Type | Description |
 |---|---|---|
 | `F_fn` | callable | `F(x)` or `F(x, theta)` |
-| `l` | array | Lower bounds |
-| `u` | array | Upper bounds (`jnp.inf` for unbounded) |
-| `x0` | array | Initial guess (same shape as `l`) |
+| `l` | 1D array | Lower bounds |
+| `u` | 1D array | Upper bounds (`jnp.inf` for unbounded) |
+| `x0` | 1D array | Initial guess (same shape as `l`) |
 | `theta` | array, optional | Parameters for `F(x, theta)`. Optional if `F` takes only `x`. |
 | `verbose` | bool | Print per-step progress (default `False`) |
 
@@ -76,7 +76,7 @@ x_star, info = solver(l, u, x0, theta)
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `return_aux` | bool | `False` | Return `(x_star, SolveInfo)` instead of just `x_star` |
-| `strict_validation` | bool or str | `False` | Opt-in traced validation — see [Input validation](#input-validation) |
+| `strict_validation` | bool or str | `True` | Traced validation mode — `True` (NaN-poisoning, default), `False` (skip checks under tracing), or `"checkify"`. See [Input validation](#input-validation). |
 
 **Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`). If `strict_validation="checkify"`, the signature is wrapped to return `(Error, ...)` per `jax.experimental.checkify` conventions.
 
@@ -123,8 +123,11 @@ grad = jax.grad(loss)(theta)              # implicit differentiation
 | `precond` | callable or None | `None` | Preconditioner `M(v) -> v` for adjoint solve |
 | `differentiate_through_x0` | bool | `False` | Enable straight-through gradients for `x0` |
 | `return_aux` | bool | `False` | Return `(x_star, SolveInfo)` instead of just `x_star` |
+| `strict_validation` | bool or str | `True` | Traced validation mode — `True` (NaN-poisoning, default), `False` (skip checks under tracing), or `"checkify"`. See [Input validation](#input-validation). |
 
-**Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`).
+**Returns:** A function `solve(l, u, x0, theta) -> x_star` (or `-> (x_star, SolveInfo)` if `return_aux=True`). If `strict_validation="checkify"`, the signature is wrapped to return `(Error, ...)` per `jax.experimental.checkify` conventions.
+
+Gradients are taken at `SolveInfo.mu_used` — the last smoothing parameter at which the Newton solve ran — so the implicit-differentiation adjoint is consistent with the returned `x_star`. On early-stop runs (where the residual at `mu_min` passed before the continuation reached `mu_min`), `mu_used` exceeds `mu_min` and the gradient reflects the coarser system that was actually solved, not the fully-smoothed limit.
 
 **Note:** `solve_mcp` cannot be JIT-compiled because it returns Python scalars. Use `make_mcp_solver` (forward-only) or `make_mcp_solver_diff` (differentiable) for JIT-compatible code.
 
@@ -147,9 +150,9 @@ NamedTuple returned alongside `x_star` when `return_aux=True`.
 
 | Field | Type | Description |
 |---|---|---|
-| `mu_used` | array | Terminal smoothing parameter reached |
+| `mu_used` | array | Last smoothing parameter at which the Newton solve ran. May be `> mu_min` when the residual at `mu_min` passed the tolerance before continuation reached `mu_min` — gradients in `make_mcp_solver_diff` are taken at this `mu_used`. |
 | `num_steps` | array | Continuation steps taken |
-| `residual_norm` | array | Max absolute smoothed residual at `mu_min` |
+| `residual_norm` | array | Max absolute smoothed residual at `mu_min` (the limiting system, not `mu_used`) |
 | `converged` | array | `residual_norm < newton_tol` |
 
 `SolveInfo` fields are JAX arrays (not Python scalars) and are stop-gradiented — gradients flow through `x_star` only.
@@ -167,7 +170,7 @@ Accepted by `solve_mcp`, `make_mcp_solver`, and `make_mcp_solver_diff`:
 | `max_mu_steps` | `50` | Maximum continuation steps |
 | `armijo_c` | `1e-4` | Armijo sufficient decrease parameter |
 | `backtrack_rho` | `0.5` | Line search contraction factor |
-| `max_ls_steps` | `20` | Maximum line search steps |
+| `max_ls_steps` | `20` | Maximum backtracking steps in the Armijo line search. The search always evaluates `alpha=1` first (Armijo-checked) and then backtracks up to `max_ls_steps` times. If no `alpha` passes Armijo, the step is rejected (`alpha=0`, iterate unchanged) — the merit function is never increased. `max_ls_steps=0` means "try `alpha=1` only, reject if it fails." |
 
 ## Forward linear solver options
 
@@ -205,12 +208,13 @@ All three entry points accept `F_fn` in two forms:
 
 > **Migration note (2026-04-18):** the factory default for `strict_validation` changed from `False` to `True`. Invalid traced inputs now produce `NaN` output and `SolveInfo.converged=False` instead of silent finite results. If you relied on the old default and your bounds are always valid, pass `strict_validation=False` explicitly to restore the previous fast path.
 
-All three entry points enforce three checks on `l`, `u`, and `x0`:
+All three entry points enforce these checks on `l`, `u`, and `x0`:
+- Rank check: `l`, `u`, and `x0` must each be 1D (`ndim == 1`). The solver supports only 1D vector state; higher-rank inputs raise `ValueError` at the public boundary. For problems with multidimensional state, flatten with `.ravel()` before calling the solver and reshape the result.
 - Shape checks: all three arrays must have the same shape.
 - NaN checks: `l`, `u`, and `x0` must not contain NaN.
 - Bound ordering: `l <= u` element-wise.
 
-Shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
+Rank and shape checks run unconditionally because shapes are available even under tracing. Value checks (NaN, ordering) behave differently depending on execution context:
 
 - **Eager execution** — full value checks run. Invalid input raises `ValueError`.
 - **Traced execution** (`jax.jit`, `jax.grad`, `jax.vmap`) — the factory default is now **safe**: `make_mcp_solver` and `make_mcp_solver_diff` both construct with `strict_validation=True` (NaN-poisoning), so invalid traced bounds or `x0` produce `NaN` output (and `SolveInfo.converged=False` with `return_aux=True`) instead of silently flowing through. Pass `strict_validation=False` to opt out of the check — see mode 4 below.

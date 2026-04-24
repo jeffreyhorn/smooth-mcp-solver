@@ -27,7 +27,13 @@ print(
     f"Converged: {result.converged} (residual={result.residual_norm:.2e}, steps={result.num_steps})"
 )
 
-# Expected solution: x* ≈ [1.0, 1.0]  (F(x*) = 0 and x* > 0)
+# This problem has two MCP solutions:
+#   [0, 2] with F(x*) = [2, 0]  (x_1 at lower bound, x_2 interior)
+#   [2, 0] with F(x*) = [0, 2]  (symmetric pair)
+# From x0 = [0.5, 1.5] the solver converges to [0, 2].
+# (The interior point [1, 1] is a root of the function x_i^2 + x_1 x_2 - 3 x_i + 2
+#  individually only at x_1 = x_2 but F(1, 1) = [1, 1] != 0, so it is not an
+#  MCP solution: it fails complementarity because x > 0 requires F = 0.)
 
 # Differentiable solve
 diff_solver = make_mcp_solver_diff(F_ncp_2d)

@@ -6,20 +6,13 @@ differentiable solves, use ``smooth_mcp.make_mcp_solver_diff`` instead.
 
 from typing import Callable, Union
 
-import jax.numpy as jnp
-from jax.experimental import checkify
-
-from smooth_mcp._kernel import (
-    make_continuation_solver,
-    make_newton_solver,
-    normalize_F,
-    sanitize_inputs,
-    traced_invalid_mask,
-    validate_bounds_and_x0,
-    validate_solver_options,
+from smooth_mcp._factory_common import (
+    build_forward_kernel,
+    build_make_aux,
+    build_public_solve,
+    validate_strict_validation,
 )
-from smooth_mcp._types import SolveInfo
-from smooth_mcp.smoothing import smoothed_residual
+from smooth_mcp._kernel import normalize_F, validate_solver_options
 
 
 def make_mcp_solver(
@@ -119,110 +112,36 @@ def make_mcp_solver(
         krylov_maxiter=krylov_maxiter,
         krylov_restart=krylov_restart,
     )
-    if strict_validation not in (False, True, "checkify"):
-        raise ValueError(
-            f"strict_validation must be False, True, or 'checkify', "
-            f"got {strict_validation!r}"
-        )
+    validate_strict_validation(strict_validation)
 
-    def _run_forward(l, u, x0, theta):
-        """Pure-JAX forward solve."""
-        newton = make_newton_solver(
-            F_fn_normalized,
-            l,
-            u,
-            theta,
-            tol=newton_tol,
-            armijo_c=armijo_c,
-            backtrack_rho=backtrack_rho,
-            max_ls_steps=max_ls_steps,
-            linear_solver=linear_solver,
-            krylov_tol=krylov_tol,
-            krylov_maxiter=krylov_maxiter,
-            krylov_restart=krylov_restart,
-            regularize=regularize,
-        )
-        continuation = make_continuation_solver(
-            newton,
-            F_fn_normalized,
-            l,
-            u,
-            theta,
-            mu_init,
-            mu_min,
-            mu_decay,
-            newton_tol,
-            max_mu_steps,
-        )
-        return continuation(x0)  # (x_star, mu_used, num_steps)
+    _run_forward = build_forward_kernel(
+        F_fn_normalized,
+        mu_init=mu_init,
+        mu_min=mu_min,
+        mu_decay=mu_decay,
+        newton_tol=newton_tol,
+        max_mu_steps=max_mu_steps,
+        armijo_c=armijo_c,
+        backtrack_rho=backtrack_rho,
+        max_ls_steps=max_ls_steps,
+        linear_solver=linear_solver,
+        krylov_tol=krylov_tol,
+        krylov_maxiter=krylov_maxiter,
+        krylov_restart=krylov_restart,
+        regularize=regularize,
+    )
+    _make_aux = build_make_aux(
+        F_fn_normalized, mu_min=mu_min, newton_tol=newton_tol, stop_grad=False
+    )
 
-    def _make_aux(x_star, mu_used, num_steps, l, u, theta):
-        """Build SolveInfo from forward results. No stop_gradient needed."""
-        mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
-        newton_tol_arr = jnp.array(newton_tol, dtype=x_star.dtype)
-        residual = smoothed_residual(x_star, F_fn_normalized, l, u, mu_min_arr, theta)
-        residual_norm = jnp.max(jnp.abs(residual))
-        converged = residual_norm < newton_tol_arr
-        return SolveInfo(
-            mu_used=mu_used,
-            num_steps=num_steps,
-            residual_norm=residual_norm,
-            converged=converged,
-        )
-
-    def _solve(l, u, x0, theta):
+    def _inner_solve(l, u, x0, theta):
         x_star, mu_used, num_steps = _run_forward(l, u, x0, theta)
         if return_aux:
             return x_star, _make_aux(x_star, mu_used, num_steps, l, u, theta)
         return x_star
 
-    def _poison_aux(aux, invalid):
-        return SolveInfo(
-            mu_used=aux.mu_used,
-            num_steps=aux.num_steps,
-            residual_norm=jnp.where(invalid, jnp.nan, aux.residual_norm),
-            converged=jnp.where(invalid, jnp.bool_(False), aux.converged),
-        )
-
-    def _poisoned_solve(l, u, x0, theta):
-        invalid = traced_invalid_mask(l, u, x0)
-        safe_l, safe_u, safe_x0 = sanitize_inputs(l, u, x0)
-        result = _solve(safe_l, safe_u, safe_x0, theta)
-        if return_aux:
-            x_star, aux = result
-            x_star = jnp.where(invalid, jnp.full_like(x_star, jnp.nan), x_star)
-            return x_star, _poison_aux(aux, invalid)
-        return jnp.where(invalid, jnp.full_like(result, jnp.nan), result)
-
-    def _checks(l, u, x0):
-        checkify.check(~jnp.any(jnp.isnan(l)), "l contains NaN")
-        checkify.check(~jnp.any(jnp.isnan(u)), "u contains NaN")
-        checkify.check(~jnp.any(jnp.isnan(x0)), "x0 contains NaN")
-        checkify.check(jnp.all(l <= u), "l must be <= u element-wise")
-
-    def solve_checked(l, u, x0, theta):
-        l, u, x0, theta = (
-            jnp.asarray(l),
-            jnp.asarray(u),
-            jnp.asarray(x0),
-            jnp.asarray(theta),
-        )
-        validate_bounds_and_x0(l, u, x0)
-        if strict_validation is True:
-            return _poisoned_solve(l, u, x0, theta)
-        return _solve(l, u, x0, theta)
-
-    if strict_validation == "checkify":
-
-        def _checkify_target(l, u, x0, theta):
-            l = jnp.asarray(l)
-            u = jnp.asarray(u)
-            x0 = jnp.asarray(x0)
-            theta = jnp.asarray(theta)
-            validate_bounds_and_x0(l, u, x0)
-            _checks(l, u, x0)
-            return _solve(l, u, x0, theta)
-
-        return checkify.checkify(_checkify_target)
-
-    return solve_checked
+    return build_public_solve(
+        _inner_solve,
+        strict_validation=strict_validation,
+        return_aux=return_aux,
+    )

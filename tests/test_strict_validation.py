@@ -96,6 +96,27 @@ class TestStrictValidationArg:
         with pytest.raises(ValueError, match="strict_validation must be"):
             make_mcp_solver_diff(_F, strict_validation=None)
 
+    def test_rejects_bool_equivalent_int(self):
+        """Integers like 1 and 0 compare equal to True/False but are not
+        the boolean singletons. The downstream strict_validation-is-True
+        check would then silently route them through the False branch.
+        Identity-based validation rejects them up front."""
+        with pytest.raises(ValueError, match="strict_validation must be"):
+            make_mcp_solver_diff(_F, strict_validation=1)
+        with pytest.raises(ValueError, match="strict_validation must be"):
+            make_mcp_solver_diff(_F, strict_validation=0)
+
+    def test_rejects_numpy_bool(self):
+        """numpy.bool_ instances compare equal to Python True/False via
+        ``==`` but fail ``is True`` / ``is False`` identity checks. They
+        must be rejected for the same reason."""
+        import numpy as np
+
+        with pytest.raises(ValueError, match="strict_validation must be"):
+            make_mcp_solver_diff(_F, strict_validation=np.bool_(True))
+        with pytest.raises(ValueError, match="strict_validation must be"):
+            make_mcp_solver_diff(_F, strict_validation=np.bool_(False))
+
 
 # ---------------------------------------------------------------------------
 # Default mode preserves existing behavior

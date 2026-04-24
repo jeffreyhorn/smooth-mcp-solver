@@ -419,6 +419,59 @@ class TestPreconditioner:
             grad_auto, grad_fd, atol=1e-5
         ), f"precond grad mismatch: auto={grad_auto}, fd={grad_fd}"
 
+    def test_cg_adjoint_with_precond(self):
+        """precond must plumb through adjoint_method='cg', not only the
+        GMRES default. Verify the CG adjoint produces FD-agreeing
+        gradients under a diagonal preconditioner."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver = make_mcp_solver_diff(
+            F, adjoint_method="cg", precond=lambda v: v / theta
+        )
+
+        def loss(th):
+            return jnp.sum(solver(l, u, x0, th) ** 2)
+
+        grad_auto = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+
+        assert jnp.allclose(
+            grad_auto, grad_fd, atol=1e-5
+        ), f"cg+precond grad mismatch: auto={grad_auto}, fd={grad_fd}"
+
+    def test_precond_composes_with_jit(self):
+        """precond is a closure-time argument captured by the factory;
+        jitting the returned solver must keep that closure intact and
+        still produce FD-agreeing gradients."""
+
+        def F(x, theta):
+            return theta * x + jnp.array([-1.0, -1.5])
+
+        l = jnp.zeros(2)
+        u = jnp.full(2, jnp.inf)
+        x0 = jnp.ones(2)
+        theta = jnp.array([2.0, 3.0])
+
+        solver = make_mcp_solver_diff(F, precond=lambda v: v / theta)
+        jitted = jax.jit(solver)
+
+        def loss(th):
+            return jnp.sum(jitted(l, u, x0, th) ** 2)
+
+        grad_auto = jax.grad(loss)(theta)
+        grad_fd = _fd_grad(loss, theta)
+
+        assert jnp.allclose(
+            grad_auto, grad_fd, atol=1e-5
+        ), f"jit+precond grad mismatch: auto={grad_auto}, fd={grad_fd}"
+
 
 class TestTruncatedContinuationGradients:
     """Test gradients when the continuation is truncated (few mu steps).

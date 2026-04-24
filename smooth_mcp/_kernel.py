@@ -18,7 +18,24 @@ def validate_bounds_and_x0(l, u, x0):
     ordering ``l <= u``) are skipped when inside any JAX tracing context
     (for example, jit, grad, vmap, or pmap), since they require concrete
     values.
+
+    The solver supports only 1D vector state. ``l``, ``u``, and ``x0`` must
+    each have ``ndim == 1``. Non-1D inputs (both higher-rank arrays and
+    0D scalars) are rejected at the public API boundary with a clear
+    ``ValueError`` rather than falling through into JAX internals (where
+    they surface as an opaque JVP shape error). Users with naturally
+    multidimensional state should flatten before calling the solver and
+    reshape the result; scalar inputs should be wrapped as length-1
+    arrays (for example with ``jnp.atleast_1d``).
     """
+    for name, arr in (("l", l), ("u", u), ("x0", x0)):
+        if arr.ndim != 1:
+            raise ValueError(
+                f"{name} must be a 1D array, got ndim={arr.ndim} with shape {arr.shape}. "
+                f"The solver supports only 1D vector state; flatten higher-rank "
+                f"inputs with .ravel() and reshape the result, or convert scalars "
+                f"to length-1 arrays (for example with jnp.atleast_1d)."
+            )
     if l.shape != u.shape:
         raise ValueError(
             f"l and u must have the same shape, got {l.shape} and {u.shape}"
@@ -246,6 +263,15 @@ def make_newton_solver(
     Returns a function solve(x0, mu) -> x. The returned function is pure
     JAX and can be traced by jax.jit or used inside lax.while_loop.
 
+    The inner line search enforces the Armijo sufficient-decrease
+    condition on phi(x) = 0.5 * ||H(x, mu)||^2. It tries ``alpha=1`` and
+    then backtracks up to ``max_ls_steps`` times by factor
+    ``backtrack_rho``. After the backtracking loop a final Armijo check
+    runs on the resulting alpha: if it still fails the step is rejected
+    (``alpha_effective=0``, iterate unchanged), so phi is never
+    increased. ``max_ls_steps=0`` means "try ``alpha=1`` only,
+    Armijo-checked"; it does not disable the check.
+
     For repeated solves with the same problem, see ``make_mcp_solver_diff``
     for a differentiable MCP solver interface.
     """
@@ -308,7 +334,22 @@ def make_newton_solver(
                 return alpha * backtrack_rho, ls_it + 1
 
             alpha_final, _ = lax.while_loop(ls_cond, ls_body, (1.0, 0))
-            x_new = x + alpha_final * d
+
+            # Budget exhaustion may have ended the loop with Armijo still
+            # unmet, so recheck and reject the step directly rather than
+            # encoding rejection as alpha=0. Selecting between x_trial and
+            # x with jnp.where keeps the rejected branch independent of
+            # d, so a NaN in d (e.g., from a failed GMRES forward solve
+            # that set d = NaN via the info check) cannot propagate into
+            # x via 0 * NaN. Applied uniformly, including max_ls_steps=0
+            # (which means "try alpha=1 only, Armijo-checked"). On
+            # rejection the iterate is unchanged and phi does not
+            # increase; Newton stalls here and the outer continuation
+            # kernel advances to the next mu in the schedule.
+            x_trial = x + alpha_final * d
+            phi_trial = 0.5 * jnp.sum(_residual(x_trial, mu) ** 2)
+            sufficient = phi_trial <= phi0 + armijo_c * alpha_final * dir_deriv
+            x_new = jnp.where(sufficient, x_trial, x)
             H_new = _residual(x_new, mu)
             return x_new, H_new, it + 1
 
@@ -342,6 +383,16 @@ def make_continuation_solver(
     uses lax.while_loop for the outer continuation, keeping all values as
     JAX arrays. No Python control flow, no float() coercions — fully
     traceable by jax.jit, jax.grad, etc.
+
+    ``mu_used`` is the last smoothing parameter at which the Newton solve
+    actually ran — i.e. the ``mu`` for which ``x_star`` is (approximately)
+    the fixed point of H(x, mu)=0. The convergence test is measured at
+    ``mu_min`` (the limiting system), so ``converged=True`` with
+    ``mu_used > mu_min`` means the solver stopped early because the
+    residual at ``mu_min`` already passed the tolerance, not because the
+    continuation reached ``mu_min``. Differentiating at ``mu_used``
+    (implicit differentiation of H(·, mu_used)=0) is consistent with the
+    returned ``x_star``.
     """
 
     def _residual_norm_at(x, mu):
@@ -362,7 +413,7 @@ def make_continuation_solver(
             x_new = newton_solve(x, mu_next)
             res = _residual_norm_at(x_new, mu_min_arr)
             converged = res < newton_tol_arr
-            mu_used_new = jnp.where(converged, mu_min_arr, mu_next)
+            mu_used_new = mu_next
             mu_next_new = jnp.maximum(mu_next * mu_decay_arr, mu_min_arr)
             return x_new, mu_next_new, mu_used_new, step + 1, converged
 

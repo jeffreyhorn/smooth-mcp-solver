@@ -5,20 +5,19 @@ from typing import Callable, Optional, Union
 import jax
 import jax.numpy as jnp
 from jax import custom_vjp
-from jax.experimental import checkify
 from jax.scipy.sparse.linalg import cg, gmres
 
+from smooth_mcp._factory_common import (
+    build_forward_kernel,
+    build_make_aux,
+    build_public_solve,
+    validate_strict_validation,
+)
 from smooth_mcp._kernel import (
-    make_continuation_solver,
-    make_newton_solver,
     normalize_F,
-    sanitize_inputs,
-    traced_invalid_mask,
     validate_adjoint_options,
-    validate_bounds_and_x0,
     validate_solver_options,
 )
-from smooth_mcp._types import SolveInfo
 from smooth_mcp.smoothing import smoothed_residual
 
 
@@ -55,10 +54,14 @@ def make_mcp_solver_diff(
 
     The backward pass uses implicit differentiation with a Jacobian-free
     iterative linear solve for the adjoint system. Gradients are computed
-    at the actual terminal smoothing parameter from the forward solve (not
-    necessarily mu_min). This means truncated solves (small max_mu_steps)
-    produce gradients consistent with the smoothed system that was actually
-    solved, rather than the fully-converged system.
+    at ``SolveInfo.mu_used`` — the last smoothing parameter at which the
+    Newton solve actually ran. This is the ``mu`` for which ``x_star`` is
+    (approximately) the fixed point of H(x, mu)=0, so the implicit-
+    differentiation adjoint is consistent with the returned solution.
+    ``mu_used`` may be larger than ``mu_min`` when the residual at
+    ``mu_min`` passed the tolerance before continuation reached
+    ``mu_min``; in that case gradients reflect the coarser system that
+    was actually solved, not the fully-smoothed limit.
 
     Args:
         F_fn: Residual map. Either F(x) -> array or F(x, theta) -> array.
@@ -154,42 +157,27 @@ def make_mcp_solver_diff(
         cg_tol=cg_tol,
         cg_maxiter=cg_maxiter,
     )
-    if strict_validation not in (False, True, "checkify"):
-        raise ValueError(
-            f"strict_validation must be False, True, or 'checkify', "
-            f"got {strict_validation!r}"
-        )
+    validate_strict_validation(strict_validation)
 
-    def _run_forward(l, u, x0, theta):
-        """Pure-JAX forward solve shared by solve() and _fwd()."""
-        newton = make_newton_solver(
-            F_fn_normalized,
-            l,
-            u,
-            theta,
-            tol=newton_tol,
-            armijo_c=armijo_c,
-            backtrack_rho=backtrack_rho,
-            max_ls_steps=max_ls_steps,
-            linear_solver=linear_solver,
-            krylov_tol=krylov_tol,
-            krylov_maxiter=krylov_maxiter,
-            krylov_restart=krylov_restart,
-            regularize=regularize,
-        )
-        continuation = make_continuation_solver(
-            newton,
-            F_fn_normalized,
-            l,
-            u,
-            theta,
-            mu_init,
-            mu_min,
-            mu_decay,
-            newton_tol,
-            max_mu_steps,
-        )
-        return continuation(x0)  # (x_star, mu_used, num_steps)
+    _run_forward = build_forward_kernel(
+        F_fn_normalized,
+        mu_init=mu_init,
+        mu_min=mu_min,
+        mu_decay=mu_decay,
+        newton_tol=newton_tol,
+        max_mu_steps=max_mu_steps,
+        armijo_c=armijo_c,
+        backtrack_rho=backtrack_rho,
+        max_ls_steps=max_ls_steps,
+        linear_solver=linear_solver,
+        krylov_tol=krylov_tol,
+        krylov_maxiter=krylov_maxiter,
+        krylov_restart=krylov_restart,
+        regularize=regularize,
+    )
+    _make_aux = build_make_aux(
+        F_fn_normalized, mu_min=mu_min, newton_tol=newton_tol, stop_grad=True
+    )
 
     def _compute_grads(x_star, mu_final, l, u, theta, g):
         """Shared adjoint computation for the backward pass."""
@@ -240,20 +228,6 @@ def make_mcp_solver_diff(
 
         return (dl, du, d_x0, dtheta)
 
-    def _make_aux(x_star, mu_used, num_steps, l, u, theta):
-        """Build stop-gradiented SolveInfo from forward results."""
-        mu_min_arr = jnp.array(mu_min, dtype=x_star.dtype)
-        newton_tol_arr = jnp.array(newton_tol, dtype=x_star.dtype)
-        residual = smoothed_residual(x_star, F_fn_normalized, l, u, mu_min_arr, theta)
-        residual_norm = jnp.max(jnp.abs(residual))
-        converged = residual_norm < newton_tol_arr
-        return SolveInfo(
-            mu_used=jax.lax.stop_gradient(mu_used),
-            num_steps=jax.lax.stop_gradient(num_steps),
-            residual_norm=jax.lax.stop_gradient(residual_norm),
-            converged=jax.lax.stop_gradient(converged),
-        )
-
     # One custom_vjp definition — always returns (x_star, mu_used, num_steps).
     # Aux packaging (return_aux) happens outside the custom_vjp boundary.
 
@@ -283,61 +257,14 @@ def make_mcp_solver_diff(
 
     _core_solve.defvjp(_core_fwd, _core_bwd)
 
-    def solve(l, u, x0, theta):
+    def _inner_solve(l, u, x0, theta):
         x_star, mu_used, num_steps = _core_solve(l, u, x0, theta)
         if return_aux:
             return x_star, _make_aux(x_star, mu_used, num_steps, l, u, theta)
         return x_star
 
-    def _poison_aux(aux, invalid):
-        """Mark SolveInfo as failed when traced inputs were invalid."""
-        return SolveInfo(
-            mu_used=aux.mu_used,
-            num_steps=aux.num_steps,
-            residual_norm=jnp.where(invalid, jnp.nan, aux.residual_norm),
-            converged=jnp.where(invalid, jnp.bool_(False), aux.converged),
-        )
-
-    def _poisoned_solve(l, u, x0, theta):
-        """NaN-poisoning wrapper around the inner custom_vjp solve."""
-        invalid = traced_invalid_mask(l, u, x0)
-        safe_l, safe_u, safe_x0 = sanitize_inputs(l, u, x0)
-        result = solve(safe_l, safe_u, safe_x0, theta)
-        if return_aux:
-            x_star, aux = result
-            x_star = jnp.where(invalid, jnp.full_like(x_star, jnp.nan), x_star)
-            return x_star, _poison_aux(aux, invalid)
-        return jnp.where(invalid, jnp.full_like(result, jnp.nan), result)
-
-    def _checks(l, u, x0):
-        checkify.check(~jnp.any(jnp.isnan(l)), "l contains NaN")
-        checkify.check(~jnp.any(jnp.isnan(u)), "u contains NaN")
-        checkify.check(~jnp.any(jnp.isnan(x0)), "x0 contains NaN")
-        checkify.check(jnp.all(l <= u), "l must be <= u element-wise")
-
-    def solve_checked(l, u, x0, theta):
-        l, u, x0, theta = (
-            jnp.asarray(l),
-            jnp.asarray(u),
-            jnp.asarray(x0),
-            jnp.asarray(theta),
-        )
-        validate_bounds_and_x0(l, u, x0)
-        if strict_validation is True:
-            return _poisoned_solve(l, u, x0, theta)
-        return solve(l, u, x0, theta)
-
-    if strict_validation == "checkify":
-
-        def _checkify_target(l, u, x0, theta):
-            l = jnp.asarray(l)
-            u = jnp.asarray(u)
-            x0 = jnp.asarray(x0)
-            theta = jnp.asarray(theta)
-            validate_bounds_and_x0(l, u, x0)
-            _checks(l, u, x0)
-            return solve(l, u, x0, theta)
-
-        return checkify.checkify(_checkify_target)
-
-    return solve_checked
+    return build_public_solve(
+        _inner_solve,
+        strict_validation=strict_validation,
+        return_aux=return_aux,
+    )

@@ -38,7 +38,7 @@ Rather than solving the smoothed system at a single small `mu` (which would be n
 3. Reduce `mu` by a factor (default `mu_decay = 0.5`), using the previous solution as the initial guess
 4. Repeat until `mu` reaches `mu_min` (default `1e-12`)
 
-Each Newton step computes the Jacobian via `jax.jacfwd` and solves a dense linear system. The line search ensures global convergence by backtracking when the full Newton step doesn't sufficiently decrease the merit function `||H(x)||^2 / 2`.
+Each Newton step computes the Jacobian via `jax.jacfwd` and solves a dense linear system. The line search enforces the Armijo sufficient-decrease condition on the merit function `||H(x)||^2 / 2`: it backtracks up to `max_ls_steps` times and, if no step passes Armijo, rejects the step (iterate unchanged, merit function not increased). Newton then stalls at this `mu` and the continuation kernel advances to the next smaller `mu` in its schedule — a smaller `mu` is less smoothed and closer to the non-smooth limit, so this does not guarantee recovery, but it allows the overall solve to report `converged=False` rather than blow up on a bad step. The merit function is therefore non-increasing across Newton steps.
 
 ### Implicit differentiation
 
@@ -52,7 +52,7 @@ dx*/dtheta = -(dH/dx)^{-1} (dH/dtheta)
 
 The backward pass solves the adjoint system `(dH/dx)^T lambda = g` (where `g` is the incoming cotangent) using GMRES, then computes `dtheta = -(dH/dtheta)^T lambda`. This is Jacobian-free — only matrix-vector products via `jax.vjp` are needed, avoiding explicit Jacobian construction in the backward pass.
 
-Gradients are computed at the actual terminal smoothing parameter from the forward solve — not necessarily `mu_min`. This means truncated solves (small `max_mu_steps`) produce gradients consistent with the smoothed system that was actually solved. The differentiable solver is fully compatible with `jax.jit`.
+Gradients are taken at `SolveInfo.mu_used` — the last smoothing parameter at which the Newton solve ran — so the implicit-differentiation adjoint is consistent with the returned `x_star`. When the continuation stops early (the residual at `mu_min` passed before mu was driven all the way down) or `max_mu_steps` is small, `mu_used` exceeds `mu_min` and the gradient reflects the coarser system that was actually solved. The differentiable solver is fully compatible with `jax.jit`.
 
 ## Installation
 
@@ -66,7 +66,7 @@ For development (editable install with test dependencies):
 pip install -e ".[dev]"
 ```
 
-JAX defaults to float32. This solver requires float64 — enable it before importing JAX arrays:
+JAX defaults to float32. This solver is designed for float64 and is only tested at float64; the Newton tolerance, adjoint-GMRES tolerance, and `mu_min` defaults (down to `1e-12`) assume 64-bit precision. float32 is not runtime-enforced — the solver will still run, but convergence and gradient accuracy are not guaranteed and have not been validated. Enable float64 before importing JAX arrays:
 
 ```python
 import jax
