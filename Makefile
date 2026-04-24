@@ -14,7 +14,7 @@ help:
 	@echo "  typecheck       - Run mypy type checker only"
 	@echo "  format          - Format code with black and ruff"
 	@echo "  test            - Run all tests with pytest (skips slow by default)"
-	@echo "  test-fast       - Run tests excluding slow gradient tests"
+	@echo "  test-fast       - Run tests excluding the full tests/test_gradients.py module (fast iteration loop)"
 	@echo "  test-slow       - Run only slow-tagged tests (e.g., bound_optimization demo)"
 	@echo "  test-examples   - Smoke-test fast demos (subset of 'test')"
 	@echo "  coverage        - Run tests with coverage report"
@@ -55,7 +55,9 @@ format:
 test:
 	$(PYTHON) -m pytest tests/ -v
 
-# Run fast tests only (skip slow gradient tests)
+# Fast iteration loop: run the full suite minus tests/test_gradients.py,
+# which is the slowest module (jit + custom_vjp + FD gradient checks).
+# @pytest.mark.slow tests are already excluded by the pyproject addopts.
 test-fast:
 	$(PYTHON) -m pytest tests/ -v --ignore=tests/test_gradients.py
 
