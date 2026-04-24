@@ -19,10 +19,6 @@ def _F(x, theta):
     return x - theta
 
 
-def _f32(*values):
-    return jnp.array(list(values), dtype=jnp.float32)
-
-
 # Easy problem: F(x) = x - 2 on [0, 3] with x0 = 1. Interior root x* = 2.
 # Chosen so the solver converges comfortably within float32 precision.
 _L = jnp.array([0.0], dtype=jnp.float32)
